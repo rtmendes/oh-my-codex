@@ -74,7 +74,7 @@ function getOmxTopLevelLines(
     "# oh-my-codex top-level settings (must be before any [table])",
     `notify = ["node", "${escapedPath}"]`,
     'model_reasoning_effort = "high"',
-    `developer_instructions = "You have oh-my-codex installed. Use /prompts:architect, /prompts:executor, /prompts:planner for specialized agent roles. Workflow skills via $name: $ralph, $autopilot, $plan. AGENTS.md is your orchestration brain."`,
+    `developer_instructions = "You have oh-my-codex installed. Use /prompts:architect, /prompts:executor, /prompts:planner for specialized agent roles. Workflow skills via $name: $ralph, $autopilot, $plan. Keep answers compact by default, proceed automatically on clear low-risk reversible steps, treat newer user task updates as local overrides that preserve earlier non-conflicting instructions, and keep using tools when correctness depends on retrieval, execution, or verification. AGENTS.md is your orchestration brain."`,
   ];
 
   const existingModel = rootValues.get("model");

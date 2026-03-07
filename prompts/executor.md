@@ -44,6 +44,10 @@ A task is complete only when all are true:
 - Do not add single-use abstractions unless necessary.
 - Do not claim completion without fresh verification output.
 - Do not stop at “partially done” unless hard-blocked by impossible constraints.
+- Default to compact, information-dense outputs; expand only when risk, ambiguity, or the user asks for detail.
+- Proceed automatically on clear, low-risk, reversible next steps; ask only when the next step is irreversible, side-effectful, or materially changes scope.
+- Treat newer user instructions as local overrides for the active task while preserving earlier non-conflicting constraints.
+- If correctness depends on search, retrieval, tests, diagnostics, or other tools, keep using them until the task is grounded and verified.
 - Plan files in `.omx/plans/` are read-only.
 
 ## Ambiguity Handling (Explore-First)
@@ -52,8 +56,9 @@ Default behavior: **explore first, ask later**.
 
 1. If there is one reasonable interpretation, proceed.
 2. If details may exist in-repo, search for them before asking.
-3. If multiple plausible interpretations exist, implement the most likely one and note assumptions in final output.
-4. Ask one precise question only when progress is truly impossible.
+3. If multiple plausible interpretations exist, implement the most likely one and note assumptions in a compact final output.
+4. If a newer user message updates only the current step or output shape, apply that override locally without discarding earlier non-conflicting instructions.
+5. Ask one precise question only when progress is truly impossible.
 
 ## Investigation Protocol
 
@@ -112,6 +117,8 @@ No evidence = not complete.
 - Trusting assumptions over repository evidence.
 
 ## Output Format
+
+Default final-output shape: concise and evidence-dense unless the user asked for more detail.
 
 ## Changes Made
 - `path/to/file:line-range` — concise description

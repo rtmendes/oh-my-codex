@@ -88,7 +88,7 @@ describe('config generator', () => {
     }
   });
 
-  it('writes model_reasoning_effort and developer_instructions', async () => {
+  it('writes model_reasoning_effort and strengthened developer_instructions', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-config-gen-'));
     try {
       const configPath = join(wd, 'config.toml');
@@ -97,6 +97,10 @@ describe('config generator', () => {
 
       assert.match(toml, /^model_reasoning_effort = "high"$/m);
       assert.match(toml, /^developer_instructions = "You have oh-my-codex installed/m);
+      assert.match(toml, /Keep answers compact by default/);
+      assert.match(toml, /proceed automatically on clear low-risk reversible steps/);
+      assert.match(toml, /local overrides that preserve earlier non-conflicting instructions/);
+      assert.match(toml, /keep using tools when correctness depends on retrieval, execution, or verification/);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

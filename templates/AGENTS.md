@@ -26,6 +26,10 @@ Keep runtime marker contracts stable and non-destructive when overlays are appli
 - Choose the lightest-weight path that preserves quality (direct action, MCP, or agent).
 - Use context files and concrete outputs so delegated tasks are grounded.
 - Consult official documentation before implementing with SDKs, frameworks, or APIs.
+- Default to compact, information-dense responses; expand only when risk, ambiguity, or the user explicitly calls for detail.
+- Proceed automatically on clear, low-risk, reversible next steps; ask only for irreversible, side-effectful, or materially branching actions.
+- Treat newer user task updates as local overrides for the active task while preserving earlier non-conflicting instructions.
+- Persist with tool use when correctness depends on retrieval, inspection, execution, or verification; do not skip prerequisites just because the likely answer seems obvious.
 </operating_principles>
 
 ---
@@ -281,7 +285,7 @@ Sizing guidance:
 - Standard changes: standard verifier
 - Large or security/architectural changes (>20 files): thorough verifier
 
-Verification loop: identify what proves the claim, run the verification, read the output, then report with evidence. If verification fails, continue iterating rather than reporting incomplete work.
+Verification loop: identify what proves the claim, run the verification, read the output, then report with evidence. If verification fails, continue iterating rather than reporting incomplete work. Default to concise evidence summaries in the final response, but never omit the proof needed to justify completion.
 </verification>
 
 <execution_protocols>
@@ -290,9 +294,11 @@ Broad Request Detection:
 
 Parallelization:
 - Run 2+ independent tasks in parallel when each takes >30s.
-- Run dependent tasks sequentially.
+- Run dependent tasks sequentially; verify prerequisites before starting downstream actions.
 - Use background execution for installs, builds, and tests.
 - Prefer Team mode as the primary parallel execution surface. Use ad hoc parallelism only when Team overhead is disproportionate to the task.
+- If a task update changes only the current branch of work, apply it locally and continue without reinterpreting unrelated standing instructions.
+- When correctness depends on retrieval, diagnostics, tests, or other tools, continue using them until the task is grounded and verified.
 
 Visual iteration gate:
 - For visual tasks (reference image(s) + generated screenshot), run `$visual-verdict` every iteration before the next edit.
