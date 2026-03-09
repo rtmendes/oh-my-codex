@@ -1,6 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isNewerVersion, shouldCheckForUpdates } from '../update.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import {
+  isNewerVersion,
+  maybeCheckAndPromptUpdate,
+  shouldCheckForUpdates,
+} from '../update.js';
 
 describe('isNewerVersion', () => {
   it('returns true when latest has higher major', () => {
@@ -78,5 +85,54 @@ describe('shouldCheckForUpdates', () => {
     const customInterval = 60 * 1000; // 1 min
     const recentCheck = new Date(now - 30 * 1000).toISOString(); // 30s ago
     assert.equal(shouldCheckForUpdates(now, { last_checked_at: recentCheck }, customInterval), false);
+  });
+});
+
+describe('maybeCheckAndPromptUpdate', () => {
+  it('runs setup refresh after a successful auto-update', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-update-'));
+    const originalStdinTty = process.stdin.isTTY;
+    const originalStdoutTty = process.stdout.isTTY;
+    const originalLog = console.log;
+    const prompts: string[] = [];
+    const setupCalls: Array<{ force?: boolean }> = [];
+
+    Object.defineProperty(process.stdin, 'isTTY', {
+      configurable: true,
+      value: true,
+    });
+    Object.defineProperty(process.stdout, 'isTTY', {
+      configurable: true,
+      value: true,
+    });
+    console.log = (...args: unknown[]) => {
+      prompts.push(args.map((arg) => String(arg)).join(' '));
+    };
+
+    try {
+      await maybeCheckAndPromptUpdate(cwd, {
+        getCurrentVersion: async () => '0.8.9',
+        fetchLatestVersion: async () => '0.9.0',
+        askYesNo: async () => true,
+        runGlobalUpdate: () => ({ ok: true, stderr: '' }),
+        setup: async (options) => {
+          setupCalls.push(options ?? {});
+        },
+      });
+
+      assert.deepEqual(setupCalls, [{ force: true }]);
+      assert.match(prompts.join('\n'), /Updated to v0\.9\.0/);
+    } finally {
+      console.log = originalLog;
+      Object.defineProperty(process.stdin, 'isTTY', {
+        configurable: true,
+        value: originalStdinTty,
+      });
+      Object.defineProperty(process.stdout, 'isTTY', {
+        configurable: true,
+        value: originalStdoutTty,
+      });
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });

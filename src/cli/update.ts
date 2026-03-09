@@ -9,6 +9,7 @@ import { join } from 'path';
 import { spawnSync } from 'child_process';
 import { createInterface } from 'readline/promises';
 import { getPackageRoot } from '../utils/package.js';
+import { setup } from './setup.js';
 
 interface UpdateState {
   last_checked_at: string;
@@ -123,7 +124,27 @@ async function askYesNo(question: string): Promise<boolean> {
   }
 }
 
-export async function maybeCheckAndPromptUpdate(cwd: string): Promise<void> {
+interface UpdateDependencies {
+  askYesNo: typeof askYesNo;
+  fetchLatestVersion: typeof fetchLatestVersion;
+  getCurrentVersion: typeof getCurrentVersion;
+  runGlobalUpdate: typeof runGlobalUpdate;
+  setup: typeof setup;
+}
+
+const defaultUpdateDependencies: UpdateDependencies = {
+  askYesNo,
+  fetchLatestVersion,
+  getCurrentVersion,
+  runGlobalUpdate,
+  setup,
+};
+
+export async function maybeCheckAndPromptUpdate(
+  cwd: string,
+  dependencies: Partial<UpdateDependencies> = {},
+): Promise<void> {
+  const updateDependencies = { ...defaultUpdateDependencies, ...dependencies };
   if (process.env.OMX_AUTO_UPDATE === '0') return;
   if (!process.stdin.isTTY || !process.stdout.isTTY) return;
 
@@ -132,8 +153,8 @@ export async function maybeCheckAndPromptUpdate(cwd: string): Promise<void> {
   if (!shouldCheckForUpdates(now, state)) return;
 
   const [current, latest] = await Promise.all([
-    getCurrentVersion(),
-    fetchLatestVersion(),
+    updateDependencies.getCurrentVersion(),
+    updateDependencies.fetchLatestVersion(),
   ]);
 
   await writeUpdateState(cwd, {
@@ -143,13 +164,16 @@ export async function maybeCheckAndPromptUpdate(cwd: string): Promise<void> {
 
   if (!current || !latest || !isNewerVersion(current, latest)) return;
 
-  const approved = await askYesNo(`[omx] Update available: v${current} → v${latest}. Update now? [Y/n] `);
+  const approved = await updateDependencies.askYesNo(
+    `[omx] Update available: v${current} → v${latest}. Update now? [Y/n] `,
+  );
   if (!approved) return;
 
   console.log(`[omx] Running: npm install -g ${PACKAGE_NAME}@latest`);
-  const result = runGlobalUpdate();
+  const result = updateDependencies.runGlobalUpdate();
 
   if (result.ok) {
+    await updateDependencies.setup({ force: true });
     console.log(`[omx] Updated to v${latest}. Restart to use new code.`);
   } else {
     console.log('[omx] Update failed. Run manually: npm install -g oh-my-codex@latest');
