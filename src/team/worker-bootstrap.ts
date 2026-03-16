@@ -2,11 +2,12 @@ import type { TeamTask } from './state.js';
 import { mkdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { getFixLoopInstructions, getVerificationInstructions } from '../verification/verifier.js';
-import { codexHome } from '../utils/paths.js';
+import { codexHome, listInstalledSkillDirectories } from '../utils/paths.js';
 import { sleep } from '../utils/sleep.js';
 
 const TEAM_OVERLAY_START = '<!-- OMX:TEAM:WORKER:START -->';
 const TEAM_OVERLAY_END = '<!-- OMX:TEAM:WORKER:END -->';
+const SKILL_REFERENCE_PATTERN = /\/skills\/([^/\s`]+)\/SKILL\.md\b/g;
 const AGENTS_LOCK_PATH = ['.omx', 'state', 'agents-md.lock'];
 const LOCK_OWNER_FILE = 'owner.json';
 const LOCK_TIMEOUT_MS = 5000;
@@ -148,6 +149,27 @@ function stripOverlayFromContent(content: string): string {
   return before + (after ? '\n\n' + after : '') + '\n';
 }
 
+function dropShadowedSkillReferenceLines(
+  content: string,
+  shadowedSkillNames: ReadonlySet<string>,
+): string {
+  if (shadowedSkillNames.size === 0) return content;
+
+  const lines = content.split('\n');
+  const keptLines = lines.filter((line) => {
+    SKILL_REFERENCE_PATTERN.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = SKILL_REFERENCE_PATTERN.exec(line)) !== null) {
+      if (shadowedSkillNames.has(match[1] || '')) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  return keptLines.join('\n');
+}
+
 /**
  * Write a team-scoped model instructions file that composes user-level
  * CODEX_HOME AGENTS.md, the project's AGENTS.md (if any), and the worker
@@ -161,11 +183,18 @@ export async function writeTeamWorkerInstructionsFile(
   overlay: string,
 ): Promise<string> {
   const baseParts: string[] = [];
+  const userAgentsPath = join(codexHome(), 'AGENTS.md');
   const sourcePaths = [
-    join(codexHome(), 'AGENTS.md'),
+    userAgentsPath,
     join(cwd, 'AGENTS.md'),
   ];
   const seenPaths = new Set<string>();
+  const installedSkills = await listInstalledSkillDirectories(cwd);
+  const projectSkillNames = new Set(
+    installedSkills
+      .filter((skill) => skill.scope === 'project')
+      .map((skill) => skill.name),
+  );
 
   for (const sourcePath of sourcePaths) {
     if (seenPaths.has(sourcePath)) continue;
@@ -179,6 +208,9 @@ export async function writeTeamWorkerInstructionsFile(
     }
 
     content = stripOverlayFromContent(content).trim();
+    if (sourcePath === userAgentsPath) {
+      content = dropShadowedSkillReferenceLines(content, projectSkillNames).trim();
+    }
     if (!content) continue;
     baseParts.push(content);
   }

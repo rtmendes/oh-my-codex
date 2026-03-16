@@ -7,6 +7,7 @@ import { dirname, join } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
+import { readdir } from 'fs/promises';
 
 /** Codex CLI home directory (~/.codex/) */
 export function codexHome(): string {
@@ -36,6 +37,59 @@ export function legacyUserSkillsDir(): string {
 /** Project-level skills directory (.agents/skills/) */
 export function projectSkillsDir(projectRoot?: string): string {
   return join(projectRoot || process.cwd(), '.agents', 'skills');
+}
+
+export type InstalledSkillScope = 'project' | 'user';
+
+export interface InstalledSkillDirectory {
+  name: string;
+  path: string;
+  scope: InstalledSkillScope;
+}
+
+async function readInstalledSkillsFromDir(
+  dir: string,
+  scope: InstalledSkillScope,
+): Promise<InstalledSkillDirectory[]> {
+  if (!existsSync(dir)) return [];
+
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({
+      name: entry.name,
+      path: join(dir, entry.name),
+      scope,
+    }))
+    .filter((entry) => existsSync(join(entry.path, 'SKILL.md')))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Installed skill directories in scope-precedence order.
+ * Project skills win over user-level skills with the same directory basename.
+ */
+export async function listInstalledSkillDirectories(
+  projectRoot?: string,
+): Promise<InstalledSkillDirectory[]> {
+  const orderedDirs: Array<{ dir: string; scope: InstalledSkillScope }> = [
+    { dir: projectSkillsDir(projectRoot), scope: 'project' },
+    { dir: userSkillsDir(), scope: 'user' },
+  ];
+
+  const deduped: InstalledSkillDirectory[] = [];
+  const seenNames = new Set<string>();
+
+  for (const { dir, scope } of orderedDirs) {
+    const skills = await readInstalledSkillsFromDir(dir, scope);
+    for (const skill of skills) {
+      if (seenNames.has(skill.name)) continue;
+      seenNames.add(skill.name);
+      deduped.push(skill);
+    }
+  }
+
+  return deduped;
 }
 
 /** oh-my-codex state directory (.omx/state/) */

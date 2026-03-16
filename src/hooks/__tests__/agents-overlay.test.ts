@@ -501,6 +501,42 @@ describe('session-scoped model instructions file', () => {
     assert.equal(projectAfter, projectContent);
   });
 
+  it('deduplicates duplicate skill references when project and user scopes both install the same skill', async () => {
+    const userAgentsMd = join(tempDir, 'home', '.codex', 'AGENTS.md');
+    const projectAgentsMd = join(tempDir, 'AGENTS.md');
+    const userSkillDir = join(tempDir, 'home', '.codex', 'skills', 'help');
+    const projectSkillDir = join(tempDir, '.agents', 'skills', 'help');
+    await mkdir(join(tempDir, 'home', '.codex'), { recursive: true });
+    await mkdir(userSkillDir, { recursive: true });
+    await mkdir(projectSkillDir, { recursive: true });
+    await writeFile(join(userSkillDir, 'SKILL.md'), '# user help\n');
+    await writeFile(join(projectSkillDir, 'SKILL.md'), '# project help\n');
+    await writeFile(
+      userAgentsMd,
+      [
+        '# User instructions',
+        '',
+        '- help: user copy (file: /tmp/home/.codex/skills/help/SKILL.md)',
+      ].join('\n'),
+    );
+    await writeFile(
+      projectAgentsMd,
+      [
+        '# Project instructions',
+        '',
+        '- help: project copy (file: /tmp/project/.agents/skills/help/SKILL.md)',
+      ].join('\n'),
+    );
+
+    const overlay = await generateOverlay(tempDir, 'session-dedupe');
+    const writtenPath = await writeSessionModelInstructionsFile(tempDir, 'session-dedupe', overlay);
+    const sessionContent = await readFile(writtenPath, 'utf-8');
+
+    assert.equal((sessionContent.match(/skills\/help\/SKILL\.md/g) || []).length, 1);
+    assert.doesNotMatch(sessionContent, /user copy/);
+    assert.match(sessionContent, /project copy/);
+  });
+
   it('writes overlay-only session file when no base AGENTS.md files exist', async () => {
     await rm(join(tempDir, 'home'), { recursive: true, force: true });
     await rm(join(tempDir, 'AGENTS.md'), { force: true });

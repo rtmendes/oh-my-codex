@@ -1,8 +1,9 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'path';
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { existsSync } from 'fs';
+import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
 import {
   codexHome,
   codexConfigPath,
@@ -10,6 +11,7 @@ import {
   userSkillsDir,
   legacyUserSkillsDir,
   projectSkillsDir,
+  listInstalledSkillDirectories,
   omxStateDir,
   omxProjectMemoryPath,
   omxNotepadPath,
@@ -120,6 +122,63 @@ describe('projectSkillsDir', () => {
 
   it('defaults to cwd when no projectRoot given', () => {
     assert.equal(projectSkillsDir(), join(process.cwd(), '.agents', 'skills'));
+  });
+});
+
+describe('listInstalledSkillDirectories', () => {
+  let originalCodexHome: string | undefined;
+
+  beforeEach(() => {
+    originalCodexHome = process.env.CODEX_HOME;
+  });
+
+  afterEach(() => {
+    if (typeof originalCodexHome === 'string') {
+      process.env.CODEX_HOME = originalCodexHome;
+    } else {
+      delete process.env.CODEX_HOME;
+    }
+  });
+
+  it('deduplicates by skill name and prefers project skills over user skills', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'omx-paths-project-'));
+    const codexHomeRoot = await mkdtemp(join(tmpdir(), 'omx-paths-codex-'));
+    process.env.CODEX_HOME = codexHomeRoot;
+
+    try {
+      const projectHelpDir = join(projectRoot, '.agents', 'skills', 'help');
+      const projectOnlyDir = join(projectRoot, '.agents', 'skills', 'project-only');
+      const userHelpDir = join(codexHomeRoot, 'skills', 'help');
+      const userOnlyDir = join(codexHomeRoot, 'skills', 'user-only');
+
+      await mkdir(projectHelpDir, { recursive: true });
+      await mkdir(projectOnlyDir, { recursive: true });
+      await mkdir(userHelpDir, { recursive: true });
+      await mkdir(userOnlyDir, { recursive: true });
+
+      await writeFile(join(projectHelpDir, 'SKILL.md'), '# project help\n');
+      await writeFile(join(projectOnlyDir, 'SKILL.md'), '# project only\n');
+      await writeFile(join(userHelpDir, 'SKILL.md'), '# user help\n');
+      await writeFile(join(userOnlyDir, 'SKILL.md'), '# user only\n');
+
+      const skills = await listInstalledSkillDirectories(projectRoot);
+
+      assert.deepEqual(
+        skills.map((skill) => ({
+          name: skill.name,
+          scope: skill.scope,
+        })),
+        [
+          { name: 'help', scope: 'project' },
+          { name: 'project-only', scope: 'project' },
+          { name: 'user-only', scope: 'user' },
+        ],
+      );
+      assert.equal(skills[0]?.path, projectHelpDir);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+      await rm(codexHomeRoot, { recursive: true, force: true });
+    }
   });
 });
 

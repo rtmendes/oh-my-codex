@@ -19,6 +19,7 @@ import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import {
   codexHome,
+  listInstalledSkillDirectories,
   omxNotepadPath,
   omxProjectMemoryPath,
   packageRoot,
@@ -34,6 +35,7 @@ const END_MARKER = '<!-- OMX:RUNTIME:END -->';
 const WORKER_START_MARKER = '<!-- OMX:TEAM:WORKER:START -->';
 const WORKER_END_MARKER = '<!-- OMX:TEAM:WORKER:END -->';
 const MAX_OVERLAY_SIZE = 3500;
+const SKILL_REFERENCE_PATTERN = /\/skills\/([^/\s`]+)\/SKILL\.md\b/g;
 
 // ── Lock helpers ─────────────────────────────────────────────────────────────
 
@@ -496,6 +498,27 @@ export function sessionModelInstructionsPath(cwd: string, sessionId: string): st
   return join(getStateDir(cwd, sessionId), 'AGENTS.md');
 }
 
+function dropShadowedSkillReferenceLines(
+  content: string,
+  shadowedSkillNames: ReadonlySet<string>,
+): string {
+  if (shadowedSkillNames.size === 0) return content;
+
+  const lines = content.split('\n');
+  const keptLines = lines.filter((line) => {
+    SKILL_REFERENCE_PATTERN.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = SKILL_REFERENCE_PATTERN.exec(line)) !== null) {
+      if (shadowedSkillNames.has(match[1] || '')) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  return keptLines.join('\n');
+}
+
 /**
  * Build a session-scoped AGENTS.md that combines user-level CODEX_HOME
  * instructions, project instructions (if any), and the runtime overlay,
@@ -515,6 +538,12 @@ export async function writeSessionModelInstructionsFile(
     join(cwd, 'AGENTS.md'),
   ];
   const seenPaths = new Set<string>();
+  const installedSkills = await listInstalledSkillDirectories(cwd);
+  const projectSkillNames = new Set(
+    installedSkills
+      .filter((skill) => skill.scope === 'project')
+      .map((skill) => skill.name),
+  );
 
   for (const sourcePath of sourcePaths) {
     if (seenPaths.has(sourcePath) || !existsSync(sourcePath)) continue;
@@ -522,6 +551,9 @@ export async function writeSessionModelInstructionsFile(
 
     let content = await readFile(sourcePath, 'utf-8');
     content = stripOverlayContent(content).trim();
+    if (sourcePath === join(codexHome(), 'AGENTS.md')) {
+      content = dropShadowedSkillReferenceLines(content, projectSkillNames).trim();
+    }
     if (!content) continue;
     baseParts.push(content);
   }
