@@ -31,6 +31,7 @@
     "build:sparkshell": "node dist/scripts/build-sparkshell.js",
     "smoke:packed-install": "node dist/scripts/smoke-packed-install.js",
     "test:sparkshell": "node dist/scripts/test-sparkshell.js",
+    "test:reply-listener:live": "node dist/scripts/test-reply-listener-live.js",
     "postpack": "npm run clean:native-package-assets"
   },
   "engines": {
