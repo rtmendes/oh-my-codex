@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -167,7 +167,7 @@ describe('validateCommonFields', () => {
 // ─── send-message ─────────────────────────────────────────────────────────
 
 describe('executeTeamApiOperation: send-message', () => {
-  it('sends a message successfully', async () => {
+  it('sends a message successfully and enqueues mailbox dispatch delivery', async () => {
     const { cwd, cleanup } = await setupTeam('msg-team');
     try {
       const result = await executeTeamApiOperation('send-message', {
@@ -177,9 +177,18 @@ describe('executeTeamApiOperation: send-message', () => {
         body: 'hello',
       }, cwd);
       assert.equal(result.ok, true);
-      if (result.ok) {
-        assert.ok(result.data.message);
-      }
+      if (!result.ok) throw new Error('expected successful send-message result');
+      assert.ok(result.data.message);
+
+      const message = result.data.message as Record<string, unknown>;
+      const messageId = String(message.message_id ?? '');
+      assert.ok(messageId, 'message should include a message_id');
+
+      const requests = await readFile(join(cwd, '.omx', 'state', 'team', 'msg-team', 'dispatch', 'requests.json'), 'utf-8');
+      const parsedRequests = JSON.parse(requests) as Array<Record<string, unknown>>;
+      const mailboxRequest = parsedRequests.find((request) => request.kind === 'mailbox' && request.message_id === messageId);
+      assert.ok(mailboxRequest, 'send-message should enqueue a mailbox dispatch request');
+      assert.equal(mailboxRequest?.to_worker, 'worker-2');
     } finally {
       await cleanup();
     }
