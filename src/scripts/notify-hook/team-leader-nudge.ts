@@ -20,7 +20,7 @@ const ACK_WITHOUT_START_EVIDENCE_REASON = 'ack_without_start_evidence';
 const ACK_LIKE_PATTERNS = [
   /^ack(?::\s*[a-z0-9-]+(?:\s+initialized)?)?[.!]*$/i,
   /^(?:ok|okay|k|roger|copy|received|got it|understood|sounds good)[.!]*$/i,
-  /^(?:on it|will do|i(?:'|’)ll do it|working on it)[.!]*$/i,
+  /^(?:on it|will do|i(?:'|')ll do it|working on it)[.!]*$/i,
 ];
 
 export function resolveLeaderNudgeIntervalMs() {
@@ -734,6 +734,7 @@ export async function maybeNudgeTeamLeader({
       text =
         `Team ${teamName}: leader stale, ${paneStatus.paneCount} worker pane(s) still active. `
         + leaderActionGuidance;
+<<<<<<< HEAD
     } else if (hasActionableNewMessage) {
       nudgeReason = 'new_mailbox_message';
       text = `Team ${teamName}: ${messages.length} msg(s) for leader. ${buildMailboxCheckReminder(teamName)}`;

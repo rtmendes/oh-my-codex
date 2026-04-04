@@ -506,6 +506,12 @@ export async function drainPendingTeamDispatch({
   logsDir = join(cwd, '.omx', 'logs'),
   maxPerTick = 5,
   injector = injectDispatchRequest,
+}: {
+  cwd?: string;
+  stateDir?: string;
+  logsDir?: string;
+  maxPerTick?: number;
+  injector?: typeof injectDispatchRequest;
 } = {}) {
   if (safeString(process.env.OMX_TEAM_WORKER)) {
     return { processed: 0, skipped: 0, failed: 0, reason: 'worker_context' };
