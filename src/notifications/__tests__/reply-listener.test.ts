@@ -16,6 +16,7 @@ import {
 } from '../reply-listener.js';
 import type { ReplyListenerDaemonConfig, ReplyListenerState } from '../reply-listener.js';
 import type { SessionMapping } from '../session-registry.js';
+import { NO_TRACKED_SESSION_MESSAGE } from '../session-status.js';
 
 function createBaseConfig(overrides: Partial<ReplyListenerDaemonConfig> = {}): ReplyListenerDaemonConfig {
   return {
@@ -383,6 +384,62 @@ describe('formatReplyAcknowledgement', () => {
 });
 
 describe('pollDiscordOnce', () => {
+  it('treats exact-match status replies as read-only Discord session lookups', async () => {
+    resetReplyListenerTransientState();
+    const config = createBaseConfig();
+    const state = createBaseState();
+    const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+    let injectCalled = false;
+
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      fetchCalls.push({ url, init });
+      if (url.endsWith('/messages?limit=10')) {
+        return jsonResponse([
+          {
+            id: 'discord-status-1',
+            author: { id: 'discord-user-1' },
+            content: '  STATUS  ',
+            message_reference: { message_id: 'orig-discord-msg' },
+          },
+        ]);
+      }
+      if (url.endsWith('/messages')) {
+        return jsonResponse({ id: 'status-reply-1' });
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    };
+
+    await pollDiscordOnce(
+      config,
+      state,
+      new RateLimiter(10),
+      {
+        fetchImpl,
+        lookupByMessageIdImpl: () => createMapping('discord-bot'),
+        buildSessionStatusReplyImpl: async (mapping) => {
+          assert.equal(mapping.sessionId, 'session-1');
+          return 'Tracked OMX session status';
+        },
+        injectReplyImpl: () => {
+          injectCalled = true;
+          return true;
+        },
+      },
+    );
+
+    assert.equal(injectCalled, false);
+    assert.equal(state.messagesInjected, 0);
+    assert.equal(state.errors, 0);
+    assert.equal(state.discordLastMessageId, 'discord-status-1');
+    assert.equal(fetchCalls.length, 2);
+
+    const replyBody = JSON.parse(String(fetchCalls[1].init?.body));
+    assert.equal(replyBody.content, 'Tracked OMX session status');
+    assert.deepEqual(replyBody.message_reference, { message_id: 'discord-status-1' });
+    assert.deepEqual(replyBody.allowed_mentions, { parse: [] });
+  });
+
   it('injects authorized replies and posts a threaded acknowledgement with recent output', async () => {
     resetReplyListenerTransientState();
     const config = createBaseConfig({ discordMention: '<@123>' });
@@ -483,6 +540,87 @@ describe('pollDiscordOnce', () => {
     assert.equal(state.messagesInjected, 0);
     assert.equal(state.errors, 0);
     assert.equal(state.discordLastMessageId, 'discord-reply-2');
+  });
+
+  it('does not return status data for unauthorized status replies', async () => {
+    resetReplyListenerTransientState();
+    const state = createBaseState();
+    const fetchCalls: string[] = [];
+
+    await pollDiscordOnce(
+      createBaseConfig(),
+      state,
+      new RateLimiter(10),
+      {
+        fetchImpl: async (input) => {
+          fetchCalls.push(String(input));
+          return jsonResponse([
+            {
+              id: 'discord-reply-unauthorized-status',
+              author: { id: 'intruder' },
+              content: 'status',
+              message_reference: { message_id: 'orig-discord-msg' },
+            },
+          ]);
+        },
+        lookupByMessageIdImpl: () => {
+          throw new Error('lookup should not run for unauthorized status replies');
+        },
+        injectReplyImpl: () => {
+          throw new Error('injectReply should not run for unauthorized status replies');
+        },
+      },
+    );
+
+    assert.deepEqual(fetchCalls, ['https://discord.com/api/v10/channels/discord-channel/messages?limit=10']);
+    assert.equal(state.messagesInjected, 0);
+    assert.equal(state.errors, 0);
+    assert.equal(state.discordLastMessageId, 'discord-reply-unauthorized-status');
+  });
+
+  it('replies with a bounded failure when status has no tracked correlation and does not inject', async () => {
+    resetReplyListenerTransientState();
+    const state = createBaseState();
+    const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+    let injectCalled = false;
+
+    await pollDiscordOnce(
+      createBaseConfig(),
+      state,
+      new RateLimiter(10),
+      {
+        fetchImpl: async (input, init) => {
+          const url = String(input);
+          fetchCalls.push({ url, init });
+          if (url.endsWith('/messages?limit=10')) {
+            return jsonResponse([
+              {
+                id: 'discord-status-untracked',
+                author: { id: 'discord-user-1' },
+                content: 'status',
+                message_reference: { message_id: 'unknown-msg' },
+              },
+            ]);
+          }
+          if (url.endsWith('/messages')) {
+            return jsonResponse({ id: 'status-failure-reply' });
+          }
+          throw new Error(`Unexpected fetch url: ${url}`);
+        },
+        lookupByMessageIdImpl: () => null,
+        injectReplyImpl: () => {
+          injectCalled = true;
+          return true;
+        },
+      },
+    );
+
+    assert.equal(injectCalled, false);
+    assert.equal(state.messagesInjected, 0);
+    assert.equal(state.errors, 0);
+    assert.equal(fetchCalls.length, 2);
+    const replyBody = JSON.parse(String(fetchCalls[1].init?.body));
+    assert.equal(replyBody.content, NO_TRACKED_SESSION_MESSAGE);
   });
 
   it('drops mapped Discord replies when the rate limiter rejects them', async () => {
