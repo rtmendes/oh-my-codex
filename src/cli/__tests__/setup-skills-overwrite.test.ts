@@ -18,7 +18,35 @@ describe('omx setup skills overwrite behavior', () => {
 
       const wikiSkill = join(wd, '.codex', 'skills', 'wiki', 'SKILL.md');
       assert.equal(existsSync(wikiSkill), true);
-      assert.match(await readFile(wikiSkill, 'utf-8'), /^---\nname: wiki/m);
+      assert.ok((await readFile(wikiSkill, 'utf-8')).includes('description: "[OMX] '));
+    } finally {
+      process.chdir(previousCwd);
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('adds an [OMX] description badge to installed shipped skills without changing the shipped source files', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-setup-skills-'));
+    const previousCwd = process.cwd();
+    try {
+      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+      process.chdir(wd);
+
+      await setup({ scope: 'project' });
+
+      const installedHelpSkill = join(wd, '.codex', 'skills', 'help', 'SKILL.md');
+      const shippedHelpSkill = join(previousCwd, 'skills', 'help', 'SKILL.md');
+
+      assert.ok(
+        (await readFile(installedHelpSkill, 'utf-8')).includes(
+          'description: "[OMX] Guide on using oh-my-codex plugin"',
+        ),
+      );
+      assert.ok(
+        (await readFile(shippedHelpSkill, 'utf-8')).includes(
+          'description: Guide on using oh-my-codex plugin',
+        ),
+      );
     } finally {
       process.chdir(previousCwd);
       await rm(wd, { recursive: true, force: true });
@@ -187,6 +215,27 @@ describe('omx setup skills overwrite behavior', () => {
 
       await setup({ scope: 'project', force: true });
       assert.equal(await readFile(customSkillPath, 'utf-8'), '---\nname: my-custom-skill\ndescription: local custom skill\n---\n');
+    } finally {
+      process.chdir(previousCwd);
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('does not keep stacking the [OMX] description badge on repeated setup runs', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-setup-skills-'));
+    const previousCwd = process.cwd();
+    try {
+      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+      process.chdir(wd);
+
+      await setup({ scope: 'project' });
+      await setup({ scope: 'project' });
+
+      const installedHelpSkill = join(wd, '.codex', 'skills', 'help', 'SKILL.md');
+      const content = await readFile(installedHelpSkill, 'utf-8');
+      const matches = content.match(/\[OMX\] Guide on using oh-my-codex plugin/g) ?? [];
+      assert.equal(matches.length, 1);
+      assert.doesNotMatch(content, /\[OMX\] \[OMX\]/);
     } finally {
       process.chdir(previousCwd);
       await rm(wd, { recursive: true, force: true });
