@@ -181,7 +181,7 @@ export async function runRalplanConsensus(
       const reviewHistory = buildReviewHistory(drafts, architectReviews, criticReviews);
       await updateRalplanState(cwd, {
         iteration,
-        current_phase: criticReview.verdict === 'approve' ? 'complete' : 'critic-review',
+        current_phase: 'critic-review',
         latest_critic_verdict: criticReview.verdict,
         latest_critic_summary: criticReview.summary,
         review_history: reviewHistory,
