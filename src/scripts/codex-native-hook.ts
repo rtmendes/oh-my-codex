@@ -2,6 +2,7 @@ import { execFileSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { mkdir, readFile, readdir, writeFile } from "fs/promises";
 import { join, resolve } from "path";
+import { pathToFileURL } from "url";
 import { readModeState, readModeStateForSession, updateModeState } from "../modes/base.js";
 import {
   listActiveSkills,
@@ -1742,6 +1743,14 @@ interface NativeHookCliReadResult {
   parseError: Error | null;
 }
 
+export function isCodexNativeHookMainModule(
+  moduleUrl: string,
+  argv1: string | undefined,
+): boolean {
+  if (!argv1) return false;
+  return moduleUrl === pathToFileURL(argv1).href;
+}
+
 async function readStdinJson(): Promise<NativeHookCliReadResult> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
@@ -1786,7 +1795,7 @@ export async function runCodexNativeHookCli(): Promise<void> {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isCodexNativeHookMainModule(import.meta.url, process.argv[1])) {
   runCodexNativeHookCli().catch((error) => {
     process.stderr.write(
       `[omx] codex-native-hook failed: ${

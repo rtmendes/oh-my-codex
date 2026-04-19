@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { buildManagedCodexHooksConfig } from "../../config/codex-hooks.js";
 import {
@@ -14,6 +15,7 @@ import {
 } from "../../team/state.js";
 import {
   dispatchCodexNativeHook,
+  isCodexNativeHookMainModule,
   mapCodexHookEventToOmxEvent,
   resolveSessionOwnerPidFromAncestry,
 } from "../codex-native-hook.js";
@@ -143,6 +145,25 @@ describe("codex native hook config", () => {
 });
 
 describe("codex native hook dispatch", () => {
+  it("treats space-containing argv entry paths as the main module", () => {
+    const entryPath = "/tmp/omx native/codex-native-hook.js";
+
+    assert.equal(
+      isCodexNativeHookMainModule(pathToFileURL(entryPath).href, entryPath),
+      true,
+    );
+  });
+
+  it("does not treat a different module url as the main module", () => {
+    assert.equal(
+      isCodexNativeHookMainModule(
+        pathToFileURL("/tmp/omx native/other-script.js").href,
+        "/tmp/omx native/codex-native-hook.js",
+      ),
+      false,
+    );
+  });
+
   it("emits deterministic JSON stdout when CLI stdin is malformed", () => {
     const stdout = execFileSync(
       process.execPath,
