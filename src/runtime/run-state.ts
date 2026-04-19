@@ -7,6 +7,7 @@ import {
   compatibilityRunOutcomeFromTerminalLifecycleOutcome,
   inferTerminalLifecycleOutcome,
   isTerminalRunOutcome,
+  normalizeTerminalLifecycleOutcome,
   normalizeRunOutcome,
   type RunOutcome,
   type TerminalLifecycleOutcome,
@@ -91,7 +92,9 @@ export function buildRunState(
   existing?: Partial<RunState> | null,
   nowIso: string = new Date().toISOString(),
 ): RunState {
-  const lifecycleOutcome = inferTerminalLifecycleOutcome(state as Record<string, unknown>, {
+  const lifecycleOutcome = normalizeTerminalLifecycleOutcome(
+    state.lifecycle_outcome ?? state.terminal_outcome,
+  ).outcome ?? inferTerminalLifecycleOutcome(state as Record<string, unknown>, {
     includeQuestionEnforcement: true,
   }) ?? existing?.lifecycle_outcome;
   const outcome = deriveRunOutcomeFromModeState(state);
