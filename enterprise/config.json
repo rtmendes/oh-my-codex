@@ -1,0 +1,66 @@
+{
+  "enterprise": "InsightProfit",
+  "version": "1.0.0",
+  "description": "Enterprise AI Operations Configuration",
+  "supabase": {
+    "url": "https://supabase.insightprofit.live",
+    "description": "Self-hosted Supabase on Oracle VPS"
+  },
+  "platforms": {
+    "polsio": {
+      "role": "SaaS Automation Platform",
+      "repo": "rtmendes/polsio"
+    },
+    "thepopebot": {
+      "role": "Agent Management Platform",
+      "url": "https://bot.insightprofit.live",
+      "repo": "rtmendes/thepopebot-production"
+    },
+    "mission-control": {
+      "role": "CEO Dashboard / Command Center",
+      "url": "https://command.insightprofit.live",
+      "repo": "rtmendes/insightprofit-mission-control"
+    },
+    "omc": {
+      "role": "Claude Code Agent Harness",
+      "repo": "rtmendes/oh-my-claudecode"
+    },
+    "omx": {
+      "role": "Codex Agent Harness",
+      "repo": "rtmendes/oh-my-codex"
+    },
+    "compound-engineering": {
+      "role": "Cross-IDE Plugin Bridge",
+      "repo": "rtmendes/compound-engineering-plugin"
+    },
+    "cli-anything": {
+      "role": "Agent-Native CLI for 70+ Apps",
+      "url": "https://clianything.cc",
+      "repo": "rtmendes/CLI-Anything"
+    }
+  },
+  "knowledge_base": {
+    "tables": [
+      "enterprise_agents",
+      "enterprise_knowledge",
+      "enterprise_tasks",
+      "enterprise_metrics",
+      "enterprise_integrations"
+    ],
+    "search_function": "search_knowledge",
+    "cost_function": "daily_cost_summary",
+    "performance_function": "agent_performance"
+  },
+  "departments": [
+    "Revenue & Sales",
+    "Marketing & Content",
+    "Product & Engineering",
+    "Operations & Fulfillment",
+    "Finance & Analytics",
+    "Strategy & Brand",
+    "Technology & Infra",
+    "HR & Talent",
+    "Brand & Creative",
+    "Product & Chief of Staff"
+  ]
+}
