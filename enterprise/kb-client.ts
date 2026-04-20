@@ -65,7 +65,7 @@ class EnterpriseKB {
 
   constructor(config?: EnterpriseConfig) {
     this.url = config?.supabaseUrl || process.env.SUPABASE_URL || 'https://supabase.insightprofit.live';
-    this.key = config?.supabaseKey || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || '';
+    this.key = config?.supabaseKey || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
     this.headers = {
       'apikey': this.key,
       'Authorization': `Bearer ${this.key}`,
