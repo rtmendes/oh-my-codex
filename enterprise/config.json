@@ -1,55 +1,37 @@
 {
   "enterprise": "InsightProfit",
-  "version": "1.0.0",
-  "description": "Enterprise AI Operations Configuration",
+  "version": "2.0.0",
+  "description": "Enterprise AI Operations Configuration — wired to existing Supabase infrastructure",
   "supabase": {
     "url": "https://supabase.insightprofit.live",
-    "description": "Self-hosted Supabase on Oracle VPS"
-  },
-  "platforms": {
-    "polsio": {
-      "role": "SaaS Automation Platform",
-      "repo": "rtmendes/polsio"
-    },
-    "thepopebot": {
-      "role": "Agent Management Platform",
-      "url": "https://bot.insightprofit.live",
-      "repo": "rtmendes/thepopebot-production"
-    },
-    "mission-control": {
-      "role": "CEO Dashboard / Command Center",
-      "url": "https://command.insightprofit.live",
-      "repo": "rtmendes/insightprofit-mission-control"
-    },
-    "omc": {
-      "role": "Claude Code Agent Harness",
-      "repo": "rtmendes/oh-my-claudecode"
-    },
-    "omx": {
-      "role": "Codex Agent Harness",
-      "repo": "rtmendes/oh-my-codex"
-    },
-    "compound-engineering": {
-      "role": "Cross-IDE Plugin Bridge",
-      "repo": "rtmendes/compound-engineering-plugin"
-    },
-    "cli-anything": {
-      "role": "Agent-Native CLI for 70+ Apps",
-      "url": "https://clianything.cc",
-      "repo": "rtmendes/CLI-Anything"
+    "description": "Self-hosted Supabase on Oracle VPS",
+    "tables": {
+      "knowledge_items": { "count": 11590, "description": "Shared knowledge base with tags, auto-inject, and priority" },
+      "agents": { "count": 15, "description": "Registered agent fleet across all platforms" },
+      "token_usage": { "description": "Per-call token usage and cost tracking" },
+      "dispatch_sessions": { "description": "Task/session tracking with department and status" },
+      "infra_current_status": { "description": "Live infrastructure health monitoring" },
+      "agent_sessions": { "description": "Agent session tracking" },
+      "agent_memory": { "description": "Persistent agent memory store" },
+      "hive_mind": { "description": "Shared AI memory with vector embeddings" },
+      "kb_documents": { "count": 165, "description": "Structured KB documents" }
     }
   },
-  "knowledge_base": {
-    "tables": [
-      "enterprise_agents",
-      "enterprise_knowledge",
-      "enterprise_tasks",
-      "enterprise_metrics",
-      "enterprise_integrations"
-    ],
-    "search_function": "search_knowledge",
-    "cost_function": "daily_cost_summary",
-    "performance_function": "agent_performance"
+  "agents": {
+    "Viktor AI": { "platform": "slack", "role": "Slack-native AI coworker" },
+    "OMC Orchestrator": { "platform": "omc", "role": "Claude Code multi-agent harness" },
+    "OMX Orchestrator": { "platform": "omx", "role": "Codex multi-agent harness" },
+    "Polsio Engine": { "platform": "polsio", "role": "SaaS automation + task queues" },
+    "ThePopeBot": { "platform": "thepopebot", "role": "Agent management platform" },
+    "Claude Dispatch": { "platform": "dispatch", "role": "Enterprise session orchestrator" },
+    "CLI-Anything Bridge": { "platform": "cli", "role": "70+ software CLI bridge" },
+    "Stalled Watchdog": { "platform": "viktor", "role": "Dispatch session monitoring" },
+    "Laina (Chief of Staff)": { "platform": "dispatch", "role": "Cross-department coordination" }
+  },
+  "endpoints": {
+    "mission-control": "https://command.insightprofit.live",
+    "thepopebot": "https://bot.insightprofit.live",
+    "cli-anything": "https://clianything.cc"
   },
   "departments": [
     "Revenue & Sales",

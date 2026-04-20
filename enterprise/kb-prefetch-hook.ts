@@ -1,26 +1,27 @@
 #!/usr/bin/env node
-// OH-MY-ClaudeCode Enterprise Hook
-// Queries the InsightProfit KB before every agent task for relevant context
-// Place in: hooks/enterprise-kb-prefetch.ts
+// OH-MY-ClaudeCode/Codex Enterprise Hook v2
+// Auto-queries the EXISTING knowledge_items table (11,590 entries) before every task
+// Logs token usage to the EXISTING token_usage table
 
-import EnterpriseKB from '../enterprise/kb-client.js';
+import EnterpriseKB from './kb-client.js';
 
 const kb = new EnterpriseKB();
 
 interface HookContext {
   task?: string;
   agent?: string;
+  agentName?: string;
   department?: string;
+  model?: string;
   [key: string]: unknown;
 }
 
 /**
- * Pre-task hook: Fetches relevant KB entries and injects them as context.
- * Called automatically before every OMC agent task.
+ * Pre-task hook: Fetches relevant KB items + auto-inject items.
+ * Injects them as context into the agent's prompt.
  */
 async function prefetchKnowledge(context: HookContext): Promise<string> {
   try {
-    // Check KB health
     const healthy = await kb.healthCheck();
     if (!healthy) {
       console.warn('[enterprise-kb] Supabase unreachable, skipping KB prefetch');
@@ -28,43 +29,65 @@ async function prefetchKnowledge(context: HookContext): Promise<string> {
     }
 
     const taskDescription = context.task || '';
-    if (!taskDescription) return '';
+    const contextParts: string[] = [];
 
-    // Search KB for relevant entries
-    const entries = await kb.searchKB(taskDescription, 5);
-
-    if (entries.length === 0) return '';
-
-    // Format as context injection
-    const contextBlock = entries.map((e, i) =>
-      `### KB Entry ${i + 1}: ${e.title}\n${e.content}\n[source: ${e.source || 'enterprise-kb'} | category: ${e.category}]`
-    ).join('\n\n');
-
-    // Log task start
-    const taskId = await kb.logTask({
-      title: taskDescription,
-      department: context.department,
-      model_used: context.agent || 'omc-agent',
-      kb_entries_used: entries.map(e => e.id!).filter(Boolean),
-    });
-
-    // Store taskId for completion hook
-    if (context) {
-      (context as Record<string, unknown>).__enterprise_task_id = taskId;
+    // 1. Get auto-inject items (always included — high priority KB entries)
+    const autoItems = await kb.getAutoInjectItems();
+    if (autoItems.length > 0) {
+      contextParts.push(
+        `### Auto-Inject Context (${autoItems.length} items)`,
+        ...autoItems.map(e => `**${e.title}**: ${e.content_plain || e.content}`)
+      );
     }
 
-    return `\n---\n📚 Enterprise KB Context (${entries.length} relevant entries):\n\n${contextBlock}\n---\n`;
+    // 2. Search for task-relevant KB entries
+    if (taskDescription) {
+      const searchResults = await kb.searchKB(taskDescription, 5);
+      if (searchResults.length > 0) {
+        contextParts.push(
+          `### Relevant KB Entries (${searchResults.length} matches)`,
+          ...searchResults.map((e, i) =>
+            `**${i + 1}. ${e.title}** [${e.tags.join(', ')}]\n${(e.content_plain || e.content).slice(0, 500)}`
+          )
+        );
+      }
+    }
+
+    if (contextParts.length === 0) return '';
+
+    // 3. Create dispatch session for tracking
+    const sessionId = await kb.createSession({
+      id: `${context.agentName || 'agent'}-${Date.now()}`,
+      title: taskDescription.slice(0, 200) || 'Agent task',
+      department: context.department,
+      status: 'running',
+    });
+
+    // Store for completion hook
+    if (context && sessionId) {
+      (context as Record<string, unknown>).__dispatch_session_id = sessionId;
+    }
+
+    // Find agent ID for token logging
+    const agentName = context.agentName || context.agent || 'OMC Orchestrator';
+    const agent = await kb.findAgent(agentName);
+    if (agent) {
+      (context as Record<string, unknown>).__agent_id = agent.id;
+    }
+
+    return `\n---\n📚 Enterprise KB (${autoItems.length} auto-inject + search results):\n\n${contextParts.join('\n\n')}\n---\n`;
   } catch (err) {
-    console.error('[enterprise-kb] Hook error:', err);
+    console.error('[enterprise-kb] Prefetch error:', err);
     return '';
   }
 }
 
 /**
- * Post-task hook: Logs completion metrics.
+ * Post-task hook: Logs token usage + updates dispatch session.
  */
 async function logCompletion(context: HookContext & {
-  __enterprise_task_id?: string;
+  __dispatch_session_id?: string;
+  __agent_id?: string;
   tokens_input?: number;
   tokens_output?: number;
   model_used?: string;
@@ -72,27 +95,34 @@ async function logCompletion(context: HookContext & {
   error?: string;
 }): Promise<void> {
   try {
-    const taskId = context.__enterprise_task_id;
-    if (!taskId) return;
+    const agentId = context.__agent_id;
+    const sessionId = context.__dispatch_session_id;
+    const model = context.model_used || context.model || 'sonnet';
 
-    // Calculate cost estimate based on model
-    const model = context.model_used || 'sonnet';
-    const costPerMToken: Record<string, number> = {
-      'haiku': 0.25, 'sonnet': 3.0, 'opus': 15.0,
-      'gpt-4o': 2.5, 'gpt-4o-mini': 0.15,
-    };
-    const rate = costPerMToken[model] || 3.0;
-    const totalTokens = (context.tokens_input || 0) + (context.tokens_output || 0);
-    const cost = (totalTokens / 1_000_000) * rate;
+    // Log token usage
+    if (agentId && (context.tokens_input || context.tokens_output)) {
+      const cost = EnterpriseKB.calculateCost(
+        model,
+        context.tokens_input || 0,
+        context.tokens_output || 0
+      );
 
-    await kb.completeTask(taskId, {
-      tokens_input: context.tokens_input,
-      tokens_output: context.tokens_output,
-      estimated_cost: cost,
-      status: context.success !== false ? 'completed' : 'failed',
-      error_log: context.error,
-      result: { model: context.model_used },
-    });
+      await kb.logTokenUsage({
+        agent_id: agentId,
+        model,
+        input_tokens: context.tokens_input || 0,
+        output_tokens: context.tokens_output || 0,
+        estimated_cost_usd: cost,
+      });
+    }
+
+    // Update dispatch session
+    if (sessionId) {
+      await kb.updateSession(sessionId, {
+        status: context.success !== false ? 'completed' : 'failed',
+        outcome: context.error || `Completed (${model}, ${(context.tokens_input || 0) + (context.tokens_output || 0)} tokens)`,
+      });
+    }
   } catch (err) {
     console.error('[enterprise-kb] Completion log error:', err);
   }
