@@ -325,6 +325,20 @@ If this happens, try:
 
 [![Star History Chart](https://api.star-history.com/svg?repos=Yeachan-Heo/oh-my-codex&type=date&legend=top-left)](https://www.star-history.com/#Yeachan-Heo/oh-my-codex&type=date&legend=top-left)
 
+
+
+## Enterprise Integration (Fork)
+
+> Custom enterprise extensions by [@rtmendes](https://github.com/rtmendes) — see `enterprise/` directory.
+
+| Integration | Description |
+|---|---|
+| **Enterprise KB** | Auto-queries knowledge base (11.5K entries) before every agent task |
+| **Polsio Bridge** | Cross-platform task submission via Polsio queue + direct Supabase fallback |
+| **Mission Control** | Surfaces OMX activity on enterprise dashboard |
+
+See `.env.enterprise.example` for configuration.
+
 ## License
 
 MIT
