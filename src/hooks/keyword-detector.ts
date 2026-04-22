@@ -11,6 +11,7 @@
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { withModeRuntimeContext } from '../state/mode-state-context.js';
 import { dirname, join } from 'node:path';
 import { classifyTaskSize, isHeavyMode, type TaskSizeResult, type TaskSizeThresholds } from './task-size-detector.js';
 import { isApprovedExecutionFollowupShortcut, type FollowupMode } from '../team/followup-planner.js';
@@ -142,6 +143,8 @@ const STATEFUL_SKILL_SEED_CONFIG: Record<StatefulSkillMode, StatefulSkillSeedCon
 export interface DeepInterviewModeState {
   active: boolean;
   mode: 'deep-interview';
+  tmux_pane_id?: string;
+  tmux_pane_set_at?: string;
   current_phase: string;
   started_at: string;
   updated_at: string;
@@ -151,6 +154,7 @@ export interface DeepInterviewModeState {
   turn_id?: string;
   input_lock?: DeepInterviewInputLock;
   question_enforcement?: DeepInterviewQuestionEnforcementState;
+  [key: string]: unknown;
 }
 
 function createDeepInterviewInputLock(nowIso: string, previous?: DeepInterviewInputLock): DeepInterviewInputLock {
@@ -247,18 +251,24 @@ export async function persistDeepInterviewModeState(
       'handoff',
       new Date(nowIso),
     );
-    const nextState: DeepInterviewModeState = {
-      active: true,
-      mode: 'deep-interview',
-      current_phase: previousModeState?.active ? previousModeState.current_phase || 'intent-first' : 'intent-first',
-      started_at: previousModeState?.active ? previousModeState.started_at || nowIso : nowIso,
-      updated_at: nowIso,
-      session_id: input.sessionId ?? previousModeState?.session_id,
-      thread_id: input.threadId ?? previousModeState?.thread_id,
-      turn_id: input.turnId ?? previousModeState?.turn_id,
-      ...(nextSkill.input_lock ? { input_lock: nextSkill.input_lock } : {}),
-      ...(nextQuestionEnforcement ? { question_enforcement: nextQuestionEnforcement } : {}),
-    };
+    const nextState = withModeRuntimeContext<DeepInterviewModeState>(
+      previousModeState ?? {},
+      {
+        ...(previousModeState?.tmux_pane_id ? { tmux_pane_id: previousModeState.tmux_pane_id } : {}),
+        ...(previousModeState?.tmux_pane_set_at ? { tmux_pane_set_at: previousModeState.tmux_pane_set_at } : {}),
+        active: true,
+        mode: 'deep-interview',
+        current_phase: previousModeState?.active ? previousModeState.current_phase || 'intent-first' : 'intent-first',
+        started_at: previousModeState?.active ? previousModeState.started_at || nowIso : nowIso,
+        updated_at: nowIso,
+        session_id: input.sessionId ?? previousModeState?.session_id,
+        thread_id: input.threadId ?? previousModeState?.thread_id,
+        turn_id: input.turnId ?? previousModeState?.turn_id,
+        ...(nextSkill.input_lock ? { input_lock: nextSkill.input_lock } : {}),
+        ...(nextQuestionEnforcement ? { question_enforcement: nextQuestionEnforcement } : {}),
+      },
+      { nowIso },
+    );
     await writeFile(statePath, JSON.stringify(nextState, null, 2));
     return;
   }
@@ -269,6 +279,8 @@ export async function persistDeepInterviewModeState(
   const releasedInputLock = nextSkill?.skill === 'deep-interview' ? nextSkill.input_lock : previousSkill?.input_lock;
   const questionExitReason = nextSkill?.skill === 'deep-interview' && nextSkill.active === false ? 'abort' : 'handoff';
   const nextState: DeepInterviewModeState = {
+    ...(previousModeState?.tmux_pane_id ? { tmux_pane_id: previousModeState.tmux_pane_id } : {}),
+    ...(previousModeState?.tmux_pane_set_at ? { tmux_pane_set_at: previousModeState.tmux_pane_set_at } : {}),
     active: false,
     mode: 'deep-interview',
     current_phase: preserveCompletedDeepInterviewPhase(previousModeState) || 'completing',
@@ -345,19 +357,25 @@ async function persistStatefulSkillSeedState(
       ? safeString(existingModeState?.started_at).trim() || nowIso
     : nowIso;
 
-  const baseState: Record<string, unknown> = {
-    ...(preserveExistingModeState ? existingModeState : {}),
-    active: true,
-    mode: config.mode,
-    current_phase: preserveExistingModeState
-      ? existingPhase || config.initialPhase
-      : config.initialPhase,
-    started_at: startedAt,
-    updated_at: nowIso,
-    session_id: nextSkill.session_id || safeString(existingModeState?.session_id).trim() || undefined,
-    thread_id: nextSkill.thread_id || safeString(existingModeState?.thread_id).trim() || undefined,
-    turn_id: nextSkill.turn_id || safeString(existingModeState?.turn_id).trim() || undefined,
-  };
+  const baseState: Record<string, unknown> = withModeRuntimeContext(
+    (preserveExistingModeState ? existingModeState : {}) ?? {},
+    {
+      ...(preserveExistingModeState ? existingModeState : {}),
+      ...(existingModeState?.tmux_pane_id ? { tmux_pane_id: existingModeState.tmux_pane_id } : {}),
+      ...(existingModeState?.tmux_pane_set_at ? { tmux_pane_set_at: existingModeState.tmux_pane_set_at } : {}),
+      active: true,
+      mode: config.mode,
+      current_phase: preserveExistingModeState
+        ? existingPhase || config.initialPhase
+        : config.initialPhase,
+      started_at: startedAt,
+      updated_at: nowIso,
+      session_id: nextSkill.session_id || safeString(existingModeState?.session_id).trim() || undefined,
+      thread_id: nextSkill.thread_id || safeString(existingModeState?.thread_id).trim() || undefined,
+      turn_id: nextSkill.turn_id || safeString(existingModeState?.turn_id).trim() || undefined,
+    },
+    { nowIso },
+  );
 
   if (config.includeIteration) {
     baseState.iteration = typeof existingModeState?.iteration === 'number' ? existingModeState.iteration : 0;

@@ -1,45 +1,46 @@
-# oh-my-codex v0.14.2
+# oh-my-codex v0.14.3
 
 ## Summary
 
-`0.14.2` is a patch release after `v0.14.1` focused on fast-follow operator reliability. It keeps ultrawork activation usable when `ulw` is typed through a Korean 2-set keyboard, aligns `omx question` answer injection with the shared tmux pane-send helper, fails closed when `omx question` cannot open a visible attached tmux renderer, prevents stale duplicate MCP siblings from lingering after post-duplicate traffic, preserves cleared deep-interview session state against legacy root fallback, clarifies that background `omx question` terminals must be awaited before continuing deep-interview, and ships the TypeScript/Biome baseline refresh that landed on `dev`.
+`0.14.3` is a patch release after `v0.14.2` focused on the latest `dev` hardening train for interactive OMX execution. It preserves leader-pane question replies across tool-launched `omx question`, keeps reused deep-interview sessions attached to the correct pane, honors project-local `CODEX_HOME` for explore sessions, prevents multiline root TOML corruption during setup, keeps HUD reconciliation in the emitting tmux window, adds deep-interview summary gates, prevents answered deep-interview rounds from re-prompting, aligns ultrawork with upstream protocol improvements, hardens visible question rendering across tmux/docker-host metadata races, keeps cleanup compatible with BusyBox `ps`, avoids stale native Stop/autopilot loops, adds canonical runtime events for supervisor control, and hardens native Windows psmux worker pane bootstrap.
 
 ## Added
 
-- **Korean `ulw` keyboard drift handling** — prompts typed as `ㅕㅣㅈ` normalize to the existing `ulw` ultrawork shorthand before workflow activation.
-- **Background-question guidance for deep-interview** — skill, template, and native-hook guidance now tell agents to wait for background `omx question` terminals to finish and read the JSON answer before scoring ambiguity or handing off.
+- **Canonical supervisor runtime events** — runtime command-event contracts now include canonical event types for supervisor control and downstream dispatch/readiness decisions.
+- **Deep-interview summary gates** — oversized interview flows now require compact summaries before continuing, reducing context blow-up during long clarification paths.
+- **Docker-host tmux question bridge** — question rendering can bridge docker-host tmux detection so operator-visible prompts survive container/host pane splits.
 
 ## Changed
 
-- **Question answer injection shares tmux submit semantics** — `src/question/renderer.ts` now delegates to `buildSendPaneArgvs`, preserving literal text delivery, shared newline sanitization, and isolated `C-m` submit calls.
-- **Question rendering now requires a visible attached tmux pane** — outside attached tmux, `omx question` raises a clear renderer error instead of spawning a detached session that the operator cannot see.
-- **Deep-interview routing intent is tighter** — cleanup/state-management mentions of “deep interview” no longer activate the workflow unless the prompt explicitly asks to run it.
-- **Toolchain baseline refresh** — TypeScript is updated to `6.0.3`, Biome lockfile metadata is refreshed to `2.4.12`, and `tsconfig.json` pins Node ambient types for the TS 6 build path.
+- **Question replies preserve the leader pane** — tool-launched `omx question` flows now retain and reuse the correct return pane across prompt reseeding and renderer metadata races.
+- **Explore respects project-local Codex homes** — launch/session helpers honor persisted project setup scope by resolving `CODEX_HOME` to the project `.codex` directory when appropriate.
+- **Setup config repair is safer** — multiline root TOML strings are parsed as root entries so setup refreshes no longer orphan fragments or corrupt `developer_instructions`-style values.
+- **HUD reconciliation stays window-local** — hook-driven HUD resize/reconcile work targets the emitting tmux window instead of drifting across windows.
+- **Ultrawork protocol stays aligned upstream** — the shipped ultrawork skill incorporates the upstream protocol refresh used by oh-my-openagent.
+- **Native Windows worker panes are more robust** — psmux worker bootstrap avoids the stale pane/startup assumptions that caused native Windows team launch regressions.
 
 ## Fixed
 
-- **Duplicate MCP sibling leaks after traffic** — older same-parent stdio duplicates now self-exit after a configurable safe idle window even if they handled traffic after the duplicate appeared.
-- **Session-scoped clear fallback leaks** — clearing a tracked mode under an active session now writes an inactive session tombstone when a legacy root fallback file exists, so status/read surfaces stay cleared.
-- **Failed deep-interview question launches no longer leave pending obligations behind** — question-launch errors clear the outstanding enforcement marker instead of trapping the workflow in a stale pending state.
-- **Release metadata drift** — Node/Cargo package metadata, lockfiles, changelog, release body, release notes, and release-readiness docs are synchronized to `0.14.2`.
+- **Answered deep-interview rounds no longer re-prompt** — stale question state is reconciled against answered records before enforcement asks again.
+- **Question answers no longer stall on renderer metadata races** — renderer return-target metadata is stabilized so answers can be injected back to the invoking pane.
+- **Detached/hidden question prompts remain operator-visible** — question rendering fails closed or bridges to visible tmux contexts instead of leaving prompts hidden from the operator.
+- **BusyBox cleanup compatibility** — cleanup retries process discovery with the BusyBox-compatible `args` field when `ps` rejects `command`.
+- **Native Stop no longer loops on stale autopilot planning state** — stale planning state is cleared/reconciled before Stop handling repeats.
+- **Release metadata drift** — Node/Cargo metadata, lockfiles, changelog, release body, release notes, and release-readiness collateral are aligned to `0.14.3`.
 
 ## Verification
 
-- `$code-review` over `v0.14.1..Yeachan-Heo/dev` — code-reviewer COMMENT and architect WATCH on follow-up boundary cleanup; no blocking findings accepted for the release cut.
-- Local latest-scope review of `v0.14.1..Yeachan-Heo/dev` — no correctness or release-blocking regressions found in the question, state, MCP, or keyword-detector fast-follow changes.
-- `npm run lint`
-- `npm test`
-- `cargo test -p omx-explore-harness -p omx-sparkshell`
-- `npm pack --dry-run`
+- `npm test` ✅ — 3910 tests passed, 0 failed; catalog check ok.
+- `npm run check:no-unused` ✅
+- `cargo test --workspace` ✅
+- `npm run lint` ✅
+- `npm run build` ✅
+- `node --test` targeted changed-path suites for question/deep-interview/hooks/team/config/cleanup/HUD ✅
 
-## Remaining risk
+## Upgrade notes
 
-- This is still a local release-readiness pass, not a full GitHub Actions matrix rerun.
-- Code-review WATCH items are documented but accepted for this patch cut: the cleared-session tombstone helper is duplicated in CLI/MCP state paths, detached question-renderer code remains as a retained legacy branch, MCP duplicate cleanup still relies on conservative process/timing heuristics, and the deep-interview contract text remains duplicated across shipped guidance surfaces.
-- The highest-value post-release observation surface remains real tmux / reused-session operator behavior around `omx question`, prompt submission, state clear/read precedence, duplicate MCP sibling cleanup, and multilingual workflow activation.
+- No migration steps are required for normal users.
+- Operators relying on project-local setup should benefit from the corrected `.codex` launch resolution automatically after setup/update refresh.
+- `omx question` continues to require an operator-visible tmux path for owned question UI rendering; when that path is unavailable it fails closed with actionable guidance.
 
-## Contributors
-
-Thanks to Yeachan-Heo, Bellman, pinion05, sappho192, and the OMX contributors who landed and reviewed the fixes in this patch train.
-
-**Full Changelog**: [`v0.14.1...v0.14.2`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.14.1...v0.14.2)
+**Full Changelog**: [`v0.14.2...v0.14.3`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.14.2...v0.14.3)

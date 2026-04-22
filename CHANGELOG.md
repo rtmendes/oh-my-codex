@@ -4,6 +4,31 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-04-22
+
+Patch release focused on the latest `dev` hardening train after `0.14.2`: question/deep-interview return-pane reliability, project-local explore launch context, setup TOML repair safety, HUD reconcile window targeting, ultrawork protocol alignment, BusyBox cleanup compatibility, stale Stop/autopilot state handling, canonical runtime supervisor events, Docker-host tmux question rendering, and native Windows psmux worker pane bootstrap hardening.
+
+### Added
+- **Canonical supervisor runtime events** — runtime command-event contracts now include canonical event types for supervisor control and downstream dispatch/readiness decisions.
+- **Deep-interview summary gates** — oversized interview flows now require compact summaries before continuing.
+- **Docker-host tmux question bridge** — question rendering can bridge docker-host tmux detection for visible operator prompts.
+
+### Changed
+- **Question replies preserve the leader pane** — tool-launched `omx question` flows retain and reuse the correct return pane across prompt reseeding and renderer metadata races.
+- **Explore respects project-local Codex homes** — launch/session helpers honor persisted project setup scope by resolving `CODEX_HOME` to the project `.codex` directory when appropriate.
+- **Setup config repair is safer** — multiline root TOML strings are parsed as root entries so setup refreshes no longer orphan fragments or corrupt `developer_instructions`-style values.
+- **HUD reconciliation stays window-local** — hook-driven HUD resize/reconcile work targets the emitting tmux window.
+- **Ultrawork protocol stays aligned upstream** — the shipped ultrawork skill incorporates the upstream protocol refresh used by oh-my-openagent.
+- **Native Windows worker panes are more robust** — psmux worker bootstrap avoids stale pane/startup assumptions.
+
+### Fixed
+- **Answered deep-interview rounds no longer re-prompt** — stale question state is reconciled against answered records before enforcement asks again.
+- **Question answers no longer stall on renderer metadata races** — renderer return-target metadata is stabilized so answers can be injected back to the invoking pane.
+- **Detached/hidden question prompts remain operator-visible** — question rendering fails closed or bridges to visible tmux contexts instead of leaving prompts hidden from the operator.
+- **BusyBox cleanup compatibility** — cleanup retries process discovery with the BusyBox-compatible `args` field when `ps` rejects `command`.
+- **Native Stop no longer loops on stale autopilot planning state** — stale planning state is cleared/reconciled before Stop handling repeats.
+- **Release metadata drift** — Node/Cargo metadata, lockfiles, changelog, release body, release notes, and release-readiness collateral are aligned to `0.14.3`.
+
 ## [0.14.2] - 2026-04-21
 
 Patch release focused on fast-follow operator reliability after `0.14.1`: safer `omx question` renderer behavior outside attached tmux panes, leak-resistant MCP duplicate cleanup, tighter deep-interview session-state handling, Korean IME drift handling for the `ulw` ultrawork shorthand, shared tmux answer-submit semantics for `omx question`, clearer deep-interview background-question guidance, TypeScript/Biome baseline refresh, and release collateral alignment.

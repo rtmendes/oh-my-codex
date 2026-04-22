@@ -61,6 +61,7 @@ import { ensureReusableNodeModules } from "../../utils/repo-deps.js";
 import { readAllState } from "../../hud/state.js";
 import { generateOverlay } from "../../hooks/agents-overlay.js";
 import { HUD_TMUX_HEIGHT_LINES } from "../../hud/constants.js";
+import { createHudWatchPane as createSharedHudWatchPane, listCurrentWindowHudPaneIds } from "../../hud/tmux.js";
 import {
   DEFAULT_FRONTIER_MODEL,
   getTeamLowComplexityModel,
@@ -1129,6 +1130,26 @@ describe("project launch scope helpers", () => {
     }
   });
 
+  it("uses project CODEX_HOME when persisted scope is project even if HOME is unusable", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-launch-scope-"));
+    try {
+      const badHome = join(wd, "home-as-file");
+      await writeFile(badHome, "not-a-directory");
+      await mkdir(join(wd, ".omx"), { recursive: true });
+      await writeFile(
+        join(wd, ".omx", "setup-scope.json"),
+        JSON.stringify({ scope: "project" }),
+      );
+      assert.equal(resolveCodexHomeForLaunch(wd, { HOME: badHome }), join(wd, ".codex"));
+      assert.equal(
+        resolveCodexConfigPathForLaunch(wd, { HOME: badHome }),
+        join(wd, ".codex", "config.toml"),
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it("uses project config.toml for launch repair when persisted scope is project", async () => {
     const wd = await mkdtemp(join(tmpdir(), "omx-launch-scope-"));
     try {
@@ -1406,6 +1427,56 @@ describe("tmux HUD pane helpers", () => {
   it("buildHudPaneCleanupTargets is a no-op guard when leaderPaneId is absent", () => {
     assert.deepEqual(buildHudPaneCleanupTargets(["%3"], "%4"), ["%3", "%4"]);
   });
+
+  it("listCurrentWindowHudPaneIds scopes tmux pane listing to the emitting pane", () => {
+    const calls: string[][] = [];
+    const panes = listCurrentWindowHudPaneIds("%leader", (args) => {
+      calls.push(args);
+      return [
+        "%leader\tcodex\tcodex",
+        "%hud\tnode\tnode /tmp/bin/omx.js hud --watch",
+      ].join("\n");
+    });
+
+    assert.deepEqual(panes, ["%hud"]);
+    assert.deepEqual(calls[0], [
+      "list-panes",
+      "-t",
+      "%leader",
+      "-F",
+      "#{pane_id}\t#{pane_current_command}\t#{pane_start_command}",
+    ]);
+  });
+
+  it("createHudWatchPane splits from the emitting pane target when provided", () => {
+    const calls: string[][] = [];
+    const paneId = createSharedHudWatchPane(
+      "/repo",
+      "node /repo/dist/cli/omx.js hud --watch",
+      { heightLines: 3, targetPaneId: "%leader" },
+      (args) => {
+        calls.push(args);
+        return "%hud\n";
+      },
+    );
+
+    assert.equal(paneId, "%hud");
+    assert.deepEqual(calls[0], [
+      "split-window",
+      "-v",
+      "-l",
+      "3",
+      "-d",
+      "-t",
+      "%leader",
+      "-c",
+      "/repo",
+      "-P",
+      "-F",
+      "#{pane_id}",
+      "node /repo/dist/cli/omx.js hud --watch",
+    ]);
+  });
 });
 
 describe("detached tmux new-session sequencing", () => {
@@ -1472,6 +1543,27 @@ describe("detached tmux new-session sequencing", () => {
     assert.equal(
       newSession!.args.includes("-e") &&
         newSession!.args.some((arg) => arg === "OMX_SESSION_ID=sess-detached-managed"),
+      true,
+    );
+  });
+
+  it("buildDetachedSessionBootstrapSteps forwards CODEX_HOME override to detached tmux session", () => {
+    const steps = buildDetachedSessionBootstrapSteps(
+      "omx-demo",
+      "/tmp/project",
+      "'codex' '--model' 'gpt-5'",
+      "'node' '/tmp/omx.js' 'hud' '--watch'",
+      null,
+      "/tmp/project/.codex",
+      null,
+      false,
+      "sess-detached-managed",
+    );
+    const newSession = steps.find((step) => step.name === "new-session");
+    assert.ok(newSession);
+    assert.equal(
+      newSession!.args.includes("-e") &&
+        newSession!.args.some((arg) => arg === "CODEX_HOME=/tmp/project/.codex"),
       true,
     );
   });

@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import TOML from "@iarna/toml";
 import { buildMergedConfig, mergeConfig, repairConfigIfNeeded } from "../generator.js";
 
 /** Count occurrences of a pattern in text */
@@ -902,6 +903,57 @@ describe("config generator idempotency (#384)", () => {
 
     assert.match(merged, /^\[mcp_servers\.seq\]$/m);
     assert.match(merged, /^startup_timeout_sec = 15$/m);
+  });
+
+  it("removes an existing multiline developer_instructions assignment as one root entry", () => {
+    const existing = [
+      'model = "gpt-5.4"',
+      'developer_instructions = """Custom instructions survive as valid TOML.',
+      'This line used to be orphaned by setup.',
+      'This closing line used to break parsing."""',
+      "",
+      "[features]",
+      "web_search = true",
+      "",
+    ].join("\n");
+
+    const merged = buildMergedConfig(existing, "/tmp/omx");
+
+    assert.doesNotMatch(merged, /This line used to be orphaned/);
+    assert.doesNotMatch(merged, /This closing line used to break parsing/);
+    assert.equal(count(merged, /^developer_instructions\s*=/gm), 1);
+    assert.doesNotThrow(() => TOML.parse(merged));
+  });
+
+  it("preserves root model values when mergeConfig sees multiline root strings", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-idem-"));
+    try {
+      const configPath = join(wd, "config.toml");
+      await writeFile(
+        configPath,
+        [
+          'developer_instructions = """Custom instructions.',
+          'Multiple lines.',
+          'Done."""',
+          'model = "o3"',
+          "model_context_window = 123456",
+          "",
+          "[features]",
+          "web_search = true",
+          "",
+        ].join("\n"),
+      );
+
+      await mergeConfig(configPath, wd);
+      const merged = await readFile(configPath, "utf-8");
+
+      assert.match(merged, /^model = "o3"$/m);
+      assert.match(merged, /^model_context_window = 123456$/m);
+      assert.doesNotMatch(merged, /^model_auto_compact_token_limit = 200000$/m);
+      assert.doesNotThrow(() => TOML.parse(merged));
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
   });
 
   it("repairConfigIfNeeded backfills launcher-backed MCP startup timeouts", async () => {

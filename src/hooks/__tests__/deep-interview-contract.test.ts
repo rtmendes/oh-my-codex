@@ -258,6 +258,25 @@ describe("deep-interview Ouroboros contract", () => {
 		assert.match(deepInterviewSkill, /\.omx\/specs\//);
 	});
 
+	it("requires prompt-safe summary gating for oversized initial context", () => {
+		assert.match(deepInterviewSkill, /prompt-safe initial-context summary/i);
+		assert.match(deepInterviewSkill, /oversized initial context/i);
+		assert.match(deepInterviewSkill, /do not paste or forward the raw payload/i);
+		assert.match(deepInterviewSkill, /wait for the concise summary before ambiguity scoring, crystallizing artifacts, or any downstream execution handoff/i);
+		assert.match(deepInterviewSkill, /The oversized initial-context summary gate is blocking/i);
+		assert.match(deepInterviewSkill, /Do not score ambiguity, do not run readiness gates, and do not hand off to `\$ralplan`, `\$autopilot`, `\$ralph`, or `\$team` until that summary answer is captured/i);
+		assert.match(deepInterviewSkill, /goals, constraints, success criteria, non-goals, decision boundaries/i);
+	});
+
+	it("documents total prompt-budget hardening for retained context", () => {
+		assert.match(deepInterviewSkill, /Keep total prompt payloads within a safe budget/i);
+		assert.match(deepInterviewSkill, /summarizing or trimming retained history/i);
+		assert.match(deepInterviewSkill, /preserve newest\/highest-signal answers/i);
+		assert.match(deepInterviewSkill, /Prompt-safe initial-context summary when oversized context was provided/i);
+		assert.match(deepInterviewSkill, /summary gate is not needed, pending, or satisfied/i);
+		assert.match(deepInterviewSkill, /before any scoring or handoff step/i);
+	});
+
 	it("requires preflight context intake before interview rounds", () => {
 		assert.match(deepInterviewSkill, /Phase 0: Preflight Context Intake/i);
 		assert.match(

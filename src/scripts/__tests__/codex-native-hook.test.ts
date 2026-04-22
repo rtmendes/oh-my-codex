@@ -101,6 +101,7 @@ const TEAM_ENV_KEYS = [
   "OMX_TEAM_STATE_ROOT",
   "OMX_TEAM_LEADER_CWD",
   "OMX_SESSION_ID",
+  "TMUX_PANE",
 ] as const;
 
 const priorTeamEnv = new Map<(typeof TEAM_ENV_KEYS)[number], string | undefined>();
@@ -635,6 +636,37 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("adds ultrawork-specific activation guidance only for true ultrawork workflow activation", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ultrawork-routing-"));
+    try {
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "sess-ultrawork-msg",
+          thread_id: "thread-ultrawork-msg",
+          turn_id: "turn-ultrawork-msg",
+          prompt: "$ultrawork fan out the regression checks",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "keyword-detector");
+      assert.equal(result.skillState?.skill, "ultrawork");
+      const message = String(
+        (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext || "",
+      );
+      assert.match(message, /\$ultrawork" -> ultrawork/);
+      assert.match(message, /ground the task before editing/i);
+      assert.match(message, /define pass\/fail acceptance criteria/i);
+      assert.match(message, /direct-tool plus background evidence lanes/i);
+      assert.match(message, /Ralph owns persistence and the full verified-completion promise/i);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("does not activate Ralph workflow state from a plain conversational mention", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ralph-plain-text-"));
     try {
@@ -840,8 +872,51 @@ describe("codex native hook dispatch", () => {
       assert.match(message, /do not fall back to `request_user_input` or plain-text questioning/i);
       assert.match(message, /After starting `omx question` in a background terminal, wait for that terminal to finish and read the JSON answer before continuing the interview\./);
       assert.match(message, /If bare `omx question` is unavailable in this reused session, use the current-session CLI bridge command:/);
-      assert.match(message, /`'.+' '.+dist\/cli\/omx\.js' question`/);
+      assert.match(message, /'.+' '.+dist\/cli\/omx\.js' question/);
+      assert.doesNotMatch(message, /OMX_QUESTION_RETURN_PANE=/);
+      assert.doesNotMatch(message, /preserve the leader pane/i);
       assert.match(message, /Stop remains blocked while a deep-interview question obligation is pending\./);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+
+  it("includes leader-pane preservation guidance when a pane hint is available", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-deep-interview-pane-hint-"));
+    try {
+      const sessionId = "sess-deep-interview-pane-hint";
+      const sessionDir = join(cwd, ".omx", "state", "sessions", sessionId);
+      await mkdir(sessionDir, { recursive: true });
+      await writeJson(join(sessionDir, "deep-interview-state.json"), {
+        active: true,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+        started_at: "2026-04-21T10:00:00.000Z",
+        updated_at: "2026-04-21T10:00:00.000Z",
+        tmux_pane_id: "%77",
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-deep-interview-pane-hint",
+          turn_id: "turn-deep-interview-pane-hint",
+          prompt: "$deep-interview gather requirements",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "keyword-detector");
+      assert.equal(result.skillState?.skill, "deep-interview");
+      const message = String(
+        (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext || "",
+      );
+      assert.match(message, /OMX_QUESTION_RETURN_PANE='%77'/);
+      assert.match(message, /preserve the leader pane/i);
+      assert.match(message, /OMX_QUESTION_RETURN_PANE=%77/);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -1219,8 +1294,8 @@ esac
 
       assert.equal(result.omxEventName, "keyword-detector");
       const tmuxCalls = await readFile(tmuxLog, "utf-8");
-      assert.match(tmuxCalls, /list-panes/);
-      assert.match(tmuxCalls, /split-window/);
+      assert.match(tmuxCalls, /list-panes -t %1 -F/);
+      assert.match(tmuxCalls, /split-window -v -l 3 -d -t %1 -c/);
       assert.match(tmuxCalls, /resize-pane -t %9 -y 3/);
       assert.match(tmuxCalls, /dist\/cli\/omx\.js' hud --watch --preset=focused/);
       assert.doesNotMatch(tmuxCalls, /\/tmp\/codex-host-binary' hud --watch/);
@@ -1237,6 +1312,91 @@ esac
       }
       process.env.PATH = originalPath;
       process.argv = originalArgv;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks Bash omx question when no leader-pane return hint is preserved", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-question-enforce-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-question-block",
+          tool_input: { command: `omx question --json --input '{"question":"Q?","options":["A"],"allow_other":true}'` },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
+      assert.match(String((result.outputJson as { systemMessage?: string } | null)?.systemMessage || ""), /OMX_QUESTION_RETURN_PANE=\$TMUX_PANE/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows Bash omx question when the command preserves the leader-pane return hint", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-question-allow-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-question-allow",
+          tool_input: { command: `OMX_QUESTION_RETURN_PANE=$TMUX_PANE omx question --json --input '{"question":"Q?","options":["A"],"allow_other":true}'` },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows the quoted pane env assignment emitted by the deep-interview bridge command", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-question-quoted-allow-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-question-quoted-allow",
+          tool_input: { command: `OMX_QUESTION_RETURN_PANE='%42' node ./dist/cli/omx.js question --json --input '{"question":"Q?","options":["A"],"allow_other":true}'` },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks Bash node omx.js question when the command does not preserve the leader-pane return hint", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-question-node-block-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-question-node-block",
+          tool_input: { command: `node ./dist/cli/omx.js question --json --input '{"question":"Q?","options":["A"],"allow_other":true}'` },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
+    } finally {
       await rm(cwd, { recursive: true, force: true });
     }
   });
@@ -2322,6 +2482,76 @@ esac
     }
   });
 
+  it("suppresses duplicate Autopilot planning Stop replays so stale planning state cannot loop indefinitely", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-autopilot-planning-replay-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(stateDir, { recursive: true });
+      await writeJson(join(stateDir, "autopilot-state.json"), {
+        active: true,
+        current_phase: "planning",
+      });
+      const payload = {
+        hook_event_name: "Stop",
+        cwd,
+        session_id: "sess-stop-autopilot-planning-replay",
+        thread_id: "thread-stop-autopilot-planning-replay",
+        turn_id: "turn-stop-autopilot-planning-replay",
+        last_assistant_message: "Autopilot planning is still active.",
+      };
+
+      const first = await dispatchCodexNativeHook(payload, { cwd });
+      const replay = await dispatchCodexNativeHook(
+        {
+          ...payload,
+          stop_hook_active: true,
+        },
+        { cwd },
+      );
+
+      assert.equal(first.omxEventName, "stop");
+      assert.deepEqual(first.outputJson, {
+        decision: "block",
+        reason:
+          "OMX autopilot is still active (phase: planning); continue the task and gather fresh verification evidence before stopping.",
+        stopReason: "autopilot_planning",
+        systemMessage: "OMX autopilot is still active (phase: planning).",
+      });
+      assert.equal(replay.omxEventName, "stop");
+      assert.equal(replay.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not block Stop from stale root Autopilot planning state when the explicit session has no scoped state", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-stale-root-autopilot-planning-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-current"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-current", cwd });
+      await writeJson(join(stateDir, "autopilot-state.json"), {
+        active: true,
+        mode: "autopilot",
+        current_phase: "planning",
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-current",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("does not block Stop when an explicit blocked_on_user run_outcome is present on a mode state", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-autopilot-blocked-outcome-"));
     try {
@@ -3345,6 +3575,91 @@ esac
         systemMessage:
           "OMX deep-interview is still active (phase: intent-first) and requires a structured question via omx question before stopping.",
       });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not re-block Stop after a same-session deep-interview question record is already answered", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-deep-interview-question-answered-"));
+    try {
+      const sessionId = "sess-stop-deep-interview-question-answered";
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionDir = join(stateDir, "sessions", sessionId);
+      await mkdir(join(sessionDir, "questions"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: sessionId });
+      await writeJson(join(sessionDir, "skill-active-state.json"), {
+        version: 1,
+        active: true,
+        skill: "deep-interview",
+        phase: "planning",
+        session_id: sessionId,
+        thread_id: "thread-stop-deep-interview-question-answered",
+      });
+      await writeJson(join(sessionDir, "deep-interview-state.json"), {
+        active: false,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+        lifecycle_outcome: "askuserQuestion",
+        run_outcome: "blocked_on_user",
+        completed_at: "2026-04-19T03:20:30.000Z",
+        session_id: sessionId,
+        thread_id: "thread-stop-deep-interview-question-answered",
+        question_enforcement: {
+          obligation_id: "obligation-answered",
+          source: "omx-question",
+          status: "pending",
+          lifecycle_outcome: "askuserQuestion",
+          requested_at: "2026-04-19T03:20:00.000Z",
+        },
+      });
+      await writeJson(join(sessionDir, "questions", "question-answered.json"), {
+        kind: "omx.question/v1",
+        question_id: "question-answered",
+        session_id: sessionId,
+        created_at: "2026-04-19T03:20:05.000Z",
+        updated_at: "2026-04-19T03:20:10.000Z",
+        status: "answered",
+        question: "What should happen next?",
+        options: [{ label: "Continue", value: "continue" }],
+        allow_other: false,
+        other_label: "Other",
+        multi_select: false,
+        type: "single-answerable",
+        source: "deep-interview",
+        answer: {
+          kind: "option",
+          value: "continue",
+          selected_labels: ["Continue"],
+          selected_values: ["continue"],
+        },
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-stop-deep-interview-question-answered",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+
+      const state = JSON.parse(
+        await readFile(join(sessionDir, "deep-interview-state.json"), "utf-8"),
+      ) as {
+        lifecycle_outcome?: string;
+        question_enforcement?: { status?: string; question_id?: string; satisfied_at?: string };
+        run_outcome?: string;
+      };
+      assert.equal(state.question_enforcement?.status, "satisfied");
+      assert.equal(state.question_enforcement?.question_id, "question-answered");
+      assert.ok(state.question_enforcement?.satisfied_at);
+      assert.equal(state.lifecycle_outcome, undefined);
+      assert.equal(state.run_outcome, undefined);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

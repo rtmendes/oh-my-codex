@@ -562,6 +562,49 @@ function buildGitCommitEnforcementOutput(commandText: string): Record<string, un
   };
 }
 
+function commandInvokesOmxQuestion(command: string): boolean {
+  const tokens = tokenizeShellCommand(command)?.map((token) => token.toLowerCase()) ?? [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const rawToken = tokens[index] || '';
+    const token = rawToken.replace(/\\/g, '/').split('/').pop() || '';
+    if ((token === 'omx' || token === 'omx.js') && tokens[index + 1] === 'question') return true;
+    if ((token === 'node' || token === 'node.exe') && /(?:^|\/)omx\.js$/.test(tokens[index + 1] || '') && tokens[index + 2] === 'question') return true;
+  }
+  return /\bomx\s+question\b/i.test(command) || /\bomx\.js['"]?\s+question\b/i.test(command);
+}
+
+function isQuestionReturnPaneAssignment(token: string): boolean {
+  const equalsIndex = token.indexOf('=');
+  if (equalsIndex <= 0) return false;
+  const name = token.slice(0, equalsIndex);
+  if (!['OMX_QUESTION_RETURN_PANE', 'OMX_LEADER_PANE_ID', 'TMUX_PANE'].includes(name)) return false;
+  const value = token.slice(equalsIndex + 1);
+  return /^%\d+$/.test(value) || /^\$\{?TMUX_PANE\}?$/.test(value);
+}
+
+function commandHasQuestionReturnPane(command: string): boolean {
+  return (tokenizeShellCommand(command) ?? []).some(isQuestionReturnPaneAssignment);
+}
+
+function buildOmxQuestionPreToolUseEnforcementOutput(command: string): Record<string, unknown> | null {
+  if (!commandInvokesOmxQuestion(command)) return null;
+  if (commandHasQuestionReturnPane(command)) return null;
+
+  return {
+    decision: "block",
+    reason: "omx question Bash invocations must preserve the leader pane return target.",
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      additionalContext: [
+        "omx question leader-pane enforcement triggered.",
+        "Prefix the Bash command with `OMX_QUESTION_RETURN_PANE=$TMUX_PANE` (or a concrete `%pane` value) so `[omx question answered]` returns to the leader pane even when the tool path drops/stales TMUX_PANE.",
+        `Original command: ${command}`,
+      ].join("\n"),
+    },
+    systemMessage: "omx question is blocked from Bash until the command preserves the leader pane with `OMX_QUESTION_RETURN_PANE=$TMUX_PANE` or an explicit `%pane` value.",
+  };
+}
+
 export function buildNativePreToolUseOutput(
   payload: CodexHookPayload,
 ): Record<string, unknown> | null {
@@ -569,6 +612,8 @@ export function buildNativePreToolUseOutput(
   if (!normalized.isBash) return null;
   const gitCommitEnforcement = buildGitCommitEnforcementOutput(normalized.normalizedCommand);
   if (gitCommitEnforcement) return gitCommitEnforcement;
+  const questionEnforcement = buildOmxQuestionPreToolUseEnforcementOutput(normalized.normalizedCommand);
+  if (questionEnforcement) return questionEnforcement;
   if (!matchesDestructiveFixture(normalized.normalizedCommand)) return null;
 
   return {

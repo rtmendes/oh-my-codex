@@ -73,15 +73,70 @@ export function getRootModelName(config: string): string | undefined {
   return unwrapTomlString(parseRootKeyValues(config).get("model"));
 }
 
+const ROOT_TABLE_HEADER_PATTERN = /^\s*\[\[?[^\]]+\]?\]\s*$/;
+const ROOT_KEY_ASSIGNMENT_PATTERN = /^\s*([A-Za-z0-9_-]+)\s*=\s*(.*)$/;
+
+type RootLevelEntry = {
+  key?: string;
+  lines: string[];
+};
+
+function parseStandaloneToml(snippet: string): boolean {
+  try {
+    TOML.parse(snippet);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function splitRootLevelEntries(config: string): {
+  entries: RootLevelEntry[];
+  remainder: string[];
+} {
+  const lines = config.split(/\r?\n/);
+  const entries: RootLevelEntry[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    if (ROOT_TABLE_HEADER_PATTERN.test(line)) break;
+
+    const match = line.match(ROOT_KEY_ASSIGNMENT_PATTERN);
+    if (!match) {
+      entries.push({ lines: [line] });
+      index += 1;
+      continue;
+    }
+
+    const entryLines = [line];
+    while (
+      !parseStandaloneToml(entryLines.join("\n")) &&
+      index + entryLines.length < lines.length
+    ) {
+      entryLines.push(lines[index + entryLines.length]);
+    }
+
+    entries.push({ key: match[1], lines: entryLines });
+    index += entryLines.length;
+  }
+
+  return { entries, remainder: lines.slice(index) };
+}
+
 function parseRootKeyValues(config: string): Map<string, string> {
   const values = new Map<string, string>();
-  const lines = config.split(/\r?\n/);
-  for (const line of lines) {
-    if (/^\s*\[/.test(line)) break;
-    const match = line.match(/^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$/);
+  const { entries } = splitRootLevelEntries(config);
+
+  for (const entry of entries) {
+    if (!entry.key) continue;
+    const [firstLine, ...rest] = entry.lines;
+    const match = firstLine.match(ROOT_KEY_ASSIGNMENT_PATTERN);
     if (!match) continue;
-    values.set(match[1], match[2]);
+    const value = [match[2], ...rest].join("\n").trim();
+    values.set(entry.key, value);
   }
+
   return values;
 }
 
@@ -194,32 +249,30 @@ export function stripOmxSeededBehavioralDefaults(config: string): string {
 }
 
 function stripRootLevelKeys(config: string, keys: readonly string[]): string {
-  let lines = config.split(/\r?\n/);
+  const { entries, remainder } = splitRootLevelEntries(config);
 
-  if (
-    keys.some((key) =>
-      OMX_TOP_LEVEL_KEYS.includes(key as (typeof OMX_TOP_LEVEL_KEYS)[number]),
-    )
-  ) {
-    lines = lines.filter(
-      (l) =>
-        l.trim() !==
-        "# oh-my-codex top-level settings (must be before any [table])",
-    );
-  }
-
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  const boundary = firstTable >= 0 ? firstTable : lines.length;
-
-  const result: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (i < boundary) {
-      const isManagedKey = keys.some((key) =>
-        new RegExp(`^\\s*${key}\\s*=`).test(lines[i]),
-      );
-      if (isManagedKey) continue;
+  const filteredEntries = entries.filter((entry) => {
+    if (
+      keys.some((key) =>
+        OMX_TOP_LEVEL_KEYS.includes(key as (typeof OMX_TOP_LEVEL_KEYS)[number]),
+      ) &&
+      entry.lines.length === 1 &&
+      entry.lines[0].trim() ===
+        "# oh-my-codex top-level settings (must be before any [table])"
+    ) {
+      return false;
     }
-    result.push(lines[i]);
+
+    return !entry.key || !keys.includes(entry.key);
+  });
+
+  const result = [
+    ...filteredEntries.flatMap((entry) => entry.lines),
+    ...remainder,
+  ];
+
+  if (result.length === 0) {
+    return "";
   }
 
   return result.join("\n");

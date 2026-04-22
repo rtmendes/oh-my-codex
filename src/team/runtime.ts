@@ -584,6 +584,25 @@ async function recordIntegrationFailure(
   );
 }
 
+async function emitCanonicalWorkerEvent(
+  cwd: string,
+  eventName: 'worker.assigned' | 'worker.stalled' | 'worker.recovered',
+  context: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const { buildNativeHookEvent } = await import('../hooks/extensibility/events.js');
+    const { dispatchHookEvent } = await import('../hooks/extensibility/dispatcher.js');
+    const event = buildNativeHookEvent(eventName, {
+      normalized_event: eventName,
+      scope: 'team-runtime',
+      ...context,
+    });
+    await dispatchHookEvent(event, { cwd });
+  } catch {
+    // best effort only
+  }
+}
+
 function autoCommitDirtyWorktree(
   worker: WorkerInfo,
 ): { committed: boolean; commitHash: string | null } {
@@ -3454,6 +3473,12 @@ async function emitMonitorDerivedEvents(
         },
         cwd
       );
+       await emitCanonicalWorkerEvent(cwd, 'worker.stalled', {
+        worker: worker.name,
+        task_id: worker.status.current_task_id,
+        reason: worker.status.reason || 'worker_stopped',
+        status: 'worker.stalled',
+      });
     }
 
     const prevState = previous?.workerStateByName[worker.name];
@@ -3471,6 +3496,15 @@ async function emitMonitorDerivedEvents(
         },
         cwd
       );
+       if (worker.status.state === 'working' && (prevState === 'blocked' || prevState === 'failed' || prevState === 'unknown')) {
+        await emitCanonicalWorkerEvent(cwd, 'worker.recovered', {
+          worker: worker.name,
+          task_id: worker.status.current_task_id,
+          reason: worker.status.reason || `state_transition:${prevState}->${worker.status.state}`,
+          recovery: 'state_transition',
+          status: 'worker.recovered',
+        });
+      }
     }
 
     if (prevState && prevState !== 'idle' && worker.status.state === 'idle') {

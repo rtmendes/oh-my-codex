@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   formatQuestionAnswerForInjection,
@@ -23,6 +26,45 @@ describe('resolveQuestionRendererStrategy', () => {
     );
   });
 
+  it('supports explicit host-pane bridge hints when TMUX is absent', () => {
+    assert.equal(
+      resolveQuestionRendererStrategy({ OMX_QUESTION_RETURN_PANE: '%77' } as NodeJS.ProcessEnv, '/usr/bin/tmux'),
+      'inside-tmux',
+    );
+    assert.equal(
+      resolveQuestionRendererStrategy({ OMX_LEADER_PANE_ID: '%88' } as NodeJS.ProcessEnv, '/usr/bin/tmux'),
+      'inside-tmux',
+    );
+  });
+
+  it('supports persisted workflow pane bridges when TMUX is absent', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'omx-question-renderer-strategy-'));
+    try {
+      const stateDir = join(cwd, '.omx', 'state', 'sessions', 'sess-stateful');
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(join(stateDir, 'deep-interview-state.json'), JSON.stringify({
+        active: true,
+        mode: 'deep-interview',
+        current_phase: 'intent-first',
+        tmux_pane_id: '%91',
+      }, null, 2));
+
+      assert.equal(
+        resolveQuestionRendererStrategy({} as NodeJS.ProcessEnv, '/usr/bin/tmux', { cwd, sessionId: 'sess-stateful' }),
+        'inside-tmux',
+      );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects malformed explicit host-pane bridge hints', () => {
+    assert.equal(
+      resolveQuestionRendererStrategy({ OMX_QUESTION_RETURN_PANE: 'not-a-pane' } as NodeJS.ProcessEnv, '/usr/bin/tmux'),
+      'unsupported',
+    );
+  });
+
   it('uses noop test renderer override when requested', () => {
     assert.equal(
       resolveQuestionRendererStrategy({ OMX_QUESTION_TEST_RENDERER: 'noop' } as NodeJS.ProcessEnv, '/usr/bin/tmux'),
@@ -37,6 +79,7 @@ describe('resolveQuestionRendererStrategy', () => {
     );
   });
 });
+
 
 describe('launchQuestionRenderer', () => {
   it('fails before building UI argv or invoking tmux when no visible renderer is available', () => {
@@ -76,7 +119,7 @@ describe('launchQuestionRenderer', () => {
     assert.deepEqual(calls, []);
   });
 
-  it('opens an interactive foreground split when already inside tmux', () => {
+  it('opens an interactive foreground split when already inside an attached tmux session', () => {
     const calls: string[][] = [];
     const result = launchQuestionRenderer(
       {
@@ -90,6 +133,7 @@ describe('launchQuestionRenderer', () => {
         strategy: 'inside-tmux',
         execTmux: (args) => {
           calls.push(args);
+          if (args[0] === 'display-message') return '1\n';
           if (args[0] === 'split-window') return '%42\n';
           if (args[0] === 'list-panes') return '0\t%42\n';
           return '';
@@ -102,20 +146,128 @@ describe('launchQuestionRenderer', () => {
     assert.equal(result.target, '%42');
     assert.equal(result.return_target, '%11');
     assert.equal(result.return_transport, 'tmux-send-keys');
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0]?.[0], 'split-window');
-    assert.ok(!calls[0]?.includes('-d'));
-    assert.equal(calls[0]?.[calls[0]!.length - 6], process.execPath);
-    assert.equal(calls[0]?.[calls[0]!.length - 5]?.endsWith('/dist/cli/omx.js'), true);
-    assert.deepEqual(calls[0]?.slice(-4), [
+    assert.equal(calls.length, 3);
+    assert.deepEqual(calls[0], ['display-message', '-p', '-t', '%11', '#{session_attached}']);
+    assert.equal(calls[1]?.[0], 'split-window');
+    assert.ok(!calls[1]?.includes('-d'));
+    assert.equal(calls[1]?.[calls[1]!.length - 6], process.execPath);
+    assert.equal(calls[1]?.[calls[1]!.length - 5]?.endsWith('/dist/cli/omx.js'), true);
+    assert.deepEqual(calls[1]?.slice(-4), [
       'question',
       '--ui',
       '--state-path',
       '/repo/.omx/state/sessions/s1/questions/question-1.json',
     ]);
-    assert.ok(calls[0]?.includes('-e'));
-    assert.ok(calls[0]?.includes('OMX_SESSION_ID=s1'));
-    assert.deepEqual(calls[1], ['list-panes', '-t', '%42', '-F', '#{pane_dead}\t#{pane_id}']);
+    assert.ok(calls[1]?.includes('-e'));
+    assert.ok(calls[1]?.includes('OMX_SESSION_ID=s1'));
+    assert.ok(calls[1]?.includes('OMX_QUESTION_RETURN_TARGET=%11'));
+    assert.ok(calls[1]?.includes('OMX_QUESTION_RETURN_TRANSPORT=tmux-send-keys'));
+    assert.deepEqual(calls[2], ['list-panes', '-t', '%42', '-F', '#{pane_dead}\t#{pane_id}']);
+  });
+
+  it('fails closed before splitting when inside a detached tmux session', () => {
+    const calls: string[][] = [];
+    assert.throws(
+      () => launchQuestionRenderer(
+        {
+          cwd: '/repo',
+          recordPath: '/repo/.omx/state/sessions/s1/questions/question-detached.json',
+          sessionId: 's1',
+          env: { TMUX: '/tmp/tmux-demo', TMUX_PANE: '%11' } as NodeJS.ProcessEnv,
+        },
+        {
+          strategy: 'inside-tmux',
+          execTmux: (args) => {
+            calls.push(args);
+            if (args[0] === 'display-message') return '0\n';
+            if (args[0] === 'split-window') return '%99\n';
+            return '';
+          },
+          sleepSync: () => {},
+        },
+      ),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /visible renderer/i);
+        assert.match(error.message, /no attached client/i);
+        assert.match(error.message, /attached tmux pane/i);
+        return true;
+      },
+    );
+
+    assert.deepEqual(calls, [['display-message', '-p', '-t', '%11', '#{session_attached}']]);
+  });
+
+  it('targets an explicit host pane when launching from a container without TMUX', () => {
+    const calls: string[][] = [];
+    const result = launchQuestionRenderer(
+      {
+        cwd: '/repo',
+        recordPath: '/repo/.omx/state/sessions/s1/questions/question-bridge.json',
+        sessionId: 's1',
+        nowIso: '2026-04-19T00:00:00.000Z',
+        env: { OMX_QUESTION_RETURN_PANE: '%77' } as NodeJS.ProcessEnv,
+      },
+      {
+        execTmux: (args) => {
+          calls.push(args);
+          if (args[0] === 'split-window') return '%78\n';
+          if (args[0] === 'list-panes') return '0\t%78\n';
+          return '';
+        },
+        sleepSync: () => {},
+      },
+    );
+
+    assert.equal(result.renderer, 'tmux-pane');
+    assert.equal(result.target, '%78');
+    assert.equal(result.return_target, '%77');
+    assert.equal(result.return_transport, 'tmux-send-keys');
+    assert.equal(calls[0]?.[0], 'split-window');
+    assert.ok(!calls[0]?.includes('-d'));
+    assert.deepEqual(calls[0]?.slice(0, 7), ['split-window', '-v', '-l', '12', '-t', '%77', '-P']);
+    assert.deepEqual(calls[1], ['list-panes', '-t', '%78', '-F', '#{pane_dead}\t#{pane_id}']);
+  });
+
+  it('targets a persisted workflow pane when launching from a container without TMUX', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'omx-question-renderer-persisted-'));
+    try {
+      const stateDir = join(cwd, '.omx', 'state', 'sessions', 'sess-stateful');
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(join(stateDir, 'deep-interview-state.json'), JSON.stringify({
+        active: true,
+        mode: 'deep-interview',
+        current_phase: 'intent-first',
+        tmux_pane_id: '%91',
+      }, null, 2));
+
+      const calls: string[][] = [];
+      const result = launchQuestionRenderer(
+        {
+          cwd,
+          recordPath: join(stateDir, 'questions', 'question-bridge.json'),
+          sessionId: 'sess-stateful',
+          env: {} as NodeJS.ProcessEnv,
+        },
+        {
+          execTmux: (args) => {
+            calls.push(args);
+            if (args[0] === 'split-window') return '%92\n';
+            if (args[0] === 'list-panes') return '0\t%92\n';
+            return '';
+          },
+          sleepSync: () => {},
+        },
+      );
+
+      assert.equal(result.renderer, 'tmux-pane');
+      assert.equal(result.target, '%92');
+      assert.equal(result.return_target, '%91');
+      assert.equal(result.return_transport, 'tmux-send-keys');
+      assert.deepEqual(calls[0]?.slice(0, 7), ['split-window', '-v', '-l', '12', '-t', '%91', '-P']);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it('fails before prompting state when a reported split pane is already gone', () => {
@@ -133,6 +285,7 @@ describe('launchQuestionRenderer', () => {
           strategy: 'inside-tmux',
           execTmux: (args) => {
             calls.push(args);
+            if (args[0] === 'display-message') return '1\n';
             if (args[0] === 'split-window') return '%42\n';
             throw new Error("can't find pane: %42");
           },
@@ -142,17 +295,104 @@ describe('launchQuestionRenderer', () => {
       /Question UI pane %42 disappeared immediately after launch/,
     );
 
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0]?.[0], 'split-window');
-    assert.equal(calls[0]?.[calls[0]!.length - 6], process.execPath);
-    assert.equal(calls[0]?.[calls[0]!.length - 5]?.endsWith('/dist/cli/omx.js'), true);
-    assert.deepEqual(calls[0]?.slice(-4), [
+    assert.equal(calls.length, 3);
+    assert.deepEqual(calls[0], ['display-message', '-p', '-t', '%11', '#{session_attached}']);
+    assert.equal(calls[1]?.[0], 'split-window');
+    assert.equal(calls[1]?.[calls[1]!.length - 6], process.execPath);
+    assert.equal(calls[1]?.[calls[1]!.length - 5]?.endsWith('/dist/cli/omx.js'), true);
+    assert.deepEqual(calls[1]?.slice(-4), [
       'question',
       '--ui',
       '--state-path',
       '/repo/.omx/state/sessions/s1/questions/question-1.json',
     ]);
-    assert.deepEqual(calls[1], ['list-panes', '-t', '%42', '-F', '#{pane_dead}\t#{pane_id}']);
+    assert.deepEqual(calls[2], ['list-panes', '-t', '%42', '-F', '#{pane_dead}\t#{pane_id}']);
+  });
+
+  it('falls back to the persisted session mode pane when Bash/tool env lost TMUX_PANE', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'omx-question-renderer-state-'));
+    try {
+      const stateDir = join(cwd, '.omx', 'state', 'sessions', 'sess-stateful');
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(join(stateDir, 'ralplan-state.json'), JSON.stringify({
+        active: true,
+        mode: 'ralplan',
+        current_phase: 'planning',
+        tmux_pane_id: '%91',
+      }, null, 2));
+
+      const calls: string[][] = [];
+      const result = launchQuestionRenderer(
+        {
+          cwd,
+          recordPath: join(cwd, '.omx', 'state', 'sessions', 'sess-stateful', 'questions', 'question-3.json'),
+          sessionId: 'sess-stateful',
+          env: { TMUX: '/tmp/tmux-demo' } as NodeJS.ProcessEnv,
+        },
+        {
+          strategy: 'inside-tmux',
+          execTmux: (args) => {
+            calls.push(args);
+            if (args[0] === 'display-message') return '1\n';
+            if (args[0] === 'split-window') return '%77\n';
+            if (args[0] === 'list-panes') return '0\t%77\n';
+            return '';
+          },
+          sleepSync: () => {},
+        },
+      );
+
+      assert.equal(result.return_target, '%91');
+      assert.equal(result.return_transport, 'tmux-send-keys');
+      assert.deepEqual(calls[0], ['display-message', '-p', '#{session_attached}']);
+      assert.equal(calls[1]?.[0], 'split-window');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('prefers session-scoped persisted panes over root workflow fallback panes', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'omx-question-renderer-precedence-'));
+    try {
+      const rootStateDir = join(cwd, '.omx', 'state');
+      const sessionStateDir = join(rootStateDir, 'sessions', 'sess-stateful');
+      mkdirSync(sessionStateDir, { recursive: true });
+      writeFileSync(join(rootStateDir, 'team-state.json'), JSON.stringify({
+        active: true,
+        mode: 'team',
+        current_phase: 'executing',
+        tmux_pane_id: '%10',
+      }, null, 2));
+      writeFileSync(join(sessionStateDir, 'ralplan-state.json'), JSON.stringify({
+        active: true,
+        mode: 'ralplan',
+        current_phase: 'planning',
+        tmux_pane_id: '%91',
+      }, null, 2));
+
+      const result = launchQuestionRenderer(
+        {
+          cwd,
+          recordPath: join(sessionStateDir, 'questions', 'question-4.json'),
+          sessionId: 'sess-stateful',
+          env: { TMUX: '/tmp/tmux-demo' } as NodeJS.ProcessEnv,
+        },
+        {
+          strategy: 'inside-tmux',
+          execTmux: (args) => {
+            if (args[0] === 'display-message') return '1\n';
+            if (args[0] === 'split-window') return '%77\n';
+            if (args[0] === 'list-panes') return '0\t%77\n';
+            return '';
+          },
+          sleepSync: () => {},
+        },
+      );
+
+      assert.equal(result.return_target, '%91');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it('passes direct tmux argv so non-POSIX default shells do not parse a shell string', () => {
@@ -168,6 +408,7 @@ describe('launchQuestionRenderer', () => {
         strategy: 'inside-tmux',
         execTmux: (args) => {
           calls.push(args);
+          if (args[0] === 'display-message') return '1\n';
           if (args[0] === 'split-window') return '%77\n';
           if (args[0] === 'list-panes') return '0\t%77\n';
           return '';
@@ -176,17 +417,58 @@ describe('launchQuestionRenderer', () => {
       },
     );
 
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0]?.some((part) => /question --ui --state-path/.test(part)), false);
-    assert.equal(calls[0]?.some((part) => /^'.*'$/.test(part)), false);
-    assert.equal(calls[0]?.[calls[0]!.length - 6], process.execPath);
-    assert.equal(calls[0]?.[calls[0]!.length - 5]?.endsWith('/dist/cli/omx.js'), true);
-    assert.deepEqual(calls[0]?.slice(-4), [
+    assert.equal(calls.length, 3);
+    assert.deepEqual(calls[0], ['display-message', '-p', '#{session_attached}']);
+    assert.equal(calls[1]?.some((part) => /question --ui --state-path/.test(part)), false);
+    assert.equal(calls[1]?.some((part) => /^'.*'$/.test(part)), false);
+    assert.equal(calls[1]?.[calls[1]!.length - 6], process.execPath);
+    assert.equal(calls[1]?.[calls[1]!.length - 5]?.endsWith('/dist/cli/omx.js'), true);
+    assert.deepEqual(calls[1]?.slice(-4), [
       'question',
       '--ui',
       '--state-path',
       '/repo/question with spaces.json',
     ]);
+  });
+
+  it('resolves the leader return target before opening the question pane', () => {
+    const calls: string[][] = [];
+    const originalTmuxPane = process.env.TMUX_PANE;
+    const originalTmux = process.env.TMUX;
+    process.env.TMUX_PANE = '%200';
+    process.env.TMUX = '/tmp/tmux-leader';
+    try {
+      const result = launchQuestionRenderer(
+        {
+          cwd: '/repo',
+          recordPath: '/repo/question-4.json',
+          sessionId: 'sess-123',
+          env: { TMUX: '/tmp/tmux-demo' } as NodeJS.ProcessEnv,
+        },
+        {
+          strategy: 'inside-tmux',
+          execTmux: (args) => {
+            calls.push(args);
+            if (args[0] === 'display-message') return '1\n';
+            if (args[0] === 'split-window') {
+              process.env.TMUX_PANE = '%201';
+              return '%201\n';
+            }
+            if (args[0] === 'list-panes') return '0\t%201\n';
+            return '';
+          },
+          sleepSync: () => {},
+        },
+      );
+
+      assert.equal(result.return_target, '%200');
+      assert.deepEqual(calls[0], ['display-message', '-p', '#{session_attached}']);
+    } finally {
+      if (typeof originalTmuxPane === 'string') process.env.TMUX_PANE = originalTmuxPane;
+      else delete process.env.TMUX_PANE;
+      if (typeof originalTmux === 'string') process.env.TMUX = originalTmux;
+      else delete process.env.TMUX;
+    }
   });
 
   it('uses detached sessions outside tmux', () => {
@@ -273,6 +555,7 @@ describe('launchQuestionRenderer', () => {
           strategy: 'inside-tmux',
           execTmux: (args) => {
             calls.push(args);
+            if (args[0] === 'display-message') return '1\n';
             if (args[0] === 'split-window') return '%42\n';
             if (args[0] === 'list-panes') return '0\t%42\n';
             return '';
@@ -282,8 +565,9 @@ describe('launchQuestionRenderer', () => {
       );
 
       assert.equal(result.target, '%42');
-      assert.equal(calls[0]?.includes('/repo/dist/cli/omx.js'), true);
-      assert.equal(calls[0]?.includes('/stale/global/dist/cli/omx.js'), false);
+      assert.deepEqual(calls[0], ['display-message', '-p', '-t', '%11', '#{session_attached}']);
+      assert.equal(calls[1]?.includes('/repo/dist/cli/omx.js'), true);
+      assert.equal(calls[1]?.includes('/stale/global/dist/cli/omx.js'), false);
     } finally {
       process.argv[1] = originalArgv1;
     }

@@ -1,6 +1,6 @@
 {
   "name": "oh-my-codex",
-  "version": "0.14.2",
+  "version": "0.14.3",
   "description": "Multi-agent orchestration layer for OpenAI Codex CLI",
   "type": "module",
   "main": "dist/index.js",
@@ -15,7 +15,7 @@
     "check:no-unused": "tsc -p tsconfig.no-unused.json",
     "clean:native-package-assets": "node dist/scripts/cleanup-explore-harness.js",
     "dev": "tsc --watch",
-    "lint": "biome lint src bin",
+    "lint": "biome lint src",
     "prepack": "npm run build && npm run clean:native-package-assets",
     "postinstall": "node src/scripts/postinstall-bootstrap.js",
     "setup": "node dist/cli/omx.js setup",

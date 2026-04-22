@@ -85,7 +85,7 @@ export async function markQuestionPrompting(
 ): Promise<QuestionRecord> {
   return updateQuestionRecord(recordPath, (record) => ({
     ...record,
-    status: 'prompting',
+    status: isTerminalQuestionStatus(record.status) ? record.status : 'prompting',
     updated_at: new Date().toISOString(),
     renderer,
   }));
