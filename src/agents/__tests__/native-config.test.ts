@@ -119,7 +119,7 @@ describe("agents/native-config", () => {
     }
   });
 
-  it("keeps standard agents off a custom gpt-5.2 root model", async () => {
+  it("inherits a custom root model for standard agents when no standard override exists", async () => {
     const root = await mkdtemp(join(tmpdir(), "omx-native-config-root-model-"));
     const codexHome = join(root, ".codex");
     const promptsDir = join(root, "prompts");
@@ -128,6 +128,33 @@ describe("agents/native-config", () => {
 
     try {
       delete process.env.OMX_DEFAULT_STANDARD_MODEL;
+      process.env.CODEX_HOME = codexHome;
+      await mkdir(promptsDir, { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await writeFile(join(codexHome, "config.toml"), 'model = "gpt-5.2"\n');
+      await writeFile(join(promptsDir, "debugger.md"), "debugger prompt");
+
+      await installNativeAgentConfigs(root, { agentsDir: outDir });
+      const debuggerToml = await readFile(join(outDir, "debugger.toml"), "utf8");
+      assert.match(debuggerToml, /model = "gpt-5\.2"/);
+      assert.doesNotMatch(debuggerToml, /model = "gpt-5\.4-mini"/);
+    } finally {
+      if (typeof previousCodexHome === "string") process.env.CODEX_HOME = previousCodexHome;
+      else delete process.env.CODEX_HOME;
+      process.env.OMX_DEFAULT_STANDARD_MODEL = "gpt-5.4-mini";
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves explicit standard model override for standard agents", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omx-native-config-standard-override-"));
+    const codexHome = join(root, ".codex");
+    const promptsDir = join(root, "prompts");
+    const outDir = join(codexHome, "agents");
+    const previousCodexHome = process.env.CODEX_HOME;
+
+    try {
+      process.env.OMX_DEFAULT_STANDARD_MODEL = "gpt-5.4-mini";
       process.env.CODEX_HOME = codexHome;
       await mkdir(promptsDir, { recursive: true });
       await mkdir(codexHome, { recursive: true });

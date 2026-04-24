@@ -2296,12 +2296,14 @@ process.on('SIGTERM', () => process.exit(0));
     const prevLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
     const prevWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
     const prevCaptureDir = process.env.OMX_ARGV_CAPTURE_DIR;
+    const prevStandardModel = process.env.OMX_DEFAULT_STANDARD_MODEL;
 
     process.env.PATH = `${binDir}:${prevPath ?? ''}`;
     delete process.env.TMUX;
     process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
     process.env.OMX_TEAM_WORKER_CLI = 'codex';
     process.env.OMX_ARGV_CAPTURE_DIR = captureDir;
+    delete process.env.OMX_DEFAULT_STANDARD_MODEL;
 
     let runtime: TeamRuntime | null = null;
     try {
@@ -2339,8 +2341,8 @@ process.on('SIGTERM', () => process.exit(0));
       assert.doesNotMatch(worker1Instructions, /exact gpt-5\.4-mini model/);
       assert.match(worker2Instructions, /You are operating as the \*\*writer\*\* role/);
       assert.match(worker2Instructions, /You are Writer\./);
-      assert.match(worker2Instructions, /exact gpt-5\.4-mini model/);
-      assert.match(worker2Instructions, /strict execution order: inspect -> plan -> act -> verify/);
+      assert.doesNotMatch(worker2Instructions, /exact gpt-5\.4-mini model/);
+      assert.match(worker2Instructions, /resolved_model: gpt-5\.5/);
 
       let worker1Args: string[] | null = null;
       let worker2Args: string[] | null = null;
@@ -2364,7 +2366,7 @@ process.on('SIGTERM', () => process.exit(0));
       assert.match(worker1Joined, /--model gpt-5\.5/);
       assert.match(worker2Joined, /model_reasoning_effort="high"/);
       assert.match(worker2Joined, /model_instructions_file=.*worker-2\/AGENTS\.md/);
-      assert.match(worker2Joined, /--model gpt-5\.4-mini/);
+      assert.match(worker2Joined, /--model gpt-5\.5/);
 
       await shutdownTeam(runtime.teamName, cwd, { force: true });
       runtime = null;
@@ -2382,6 +2384,8 @@ process.on('SIGTERM', () => process.exit(0));
       else delete process.env.OMX_TEAM_WORKER_CLI;
       if (typeof prevCaptureDir === 'string') process.env.OMX_ARGV_CAPTURE_DIR = prevCaptureDir;
       else delete process.env.OMX_ARGV_CAPTURE_DIR;
+      if (typeof prevStandardModel === 'string') process.env.OMX_DEFAULT_STANDARD_MODEL = prevStandardModel;
+      else delete process.env.OMX_DEFAULT_STANDARD_MODEL;
       await rm(cwd, { recursive: true, force: true });
     }
   });
@@ -2417,12 +2421,14 @@ process.on('SIGTERM', () => process.exit(0));
     const prevWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
     const prevCaptureDir = process.env.OMX_ARGV_CAPTURE_DIR;
     const prevLaunchArgs = process.env.OMX_TEAM_WORKER_LAUNCH_ARGS;
+    const prevStandardModel = process.env.OMX_DEFAULT_STANDARD_MODEL;
 
     process.env.PATH = `${binDir}:${prevPath ?? ''}`;
     delete process.env.TMUX;
     process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
     process.env.OMX_TEAM_WORKER_CLI = 'codex';
     process.env.OMX_ARGV_CAPTURE_DIR = captureDir;
+    delete process.env.OMX_DEFAULT_STANDARD_MODEL;
     process.env.OMX_TEAM_WORKER_LAUNCH_ARGS = '--model gpt-5.4-mini-tuned';
 
     let runtime: TeamRuntime | null = null;
@@ -2477,6 +2483,8 @@ process.on('SIGTERM', () => process.exit(0));
       else delete process.env.OMX_TEAM_WORKER_CLI;
       if (typeof prevCaptureDir === 'string') process.env.OMX_ARGV_CAPTURE_DIR = prevCaptureDir;
       else delete process.env.OMX_ARGV_CAPTURE_DIR;
+      if (typeof prevStandardModel === 'string') process.env.OMX_DEFAULT_STANDARD_MODEL = prevStandardModel;
+      else delete process.env.OMX_DEFAULT_STANDARD_MODEL;
       if (typeof prevLaunchArgs === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_ARGS = prevLaunchArgs;
       else delete process.env.OMX_TEAM_WORKER_LAUNCH_ARGS;
       await rm(cwd, { recursive: true, force: true });
