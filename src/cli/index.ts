@@ -32,6 +32,7 @@ import { agentsCommand } from "./agents.js";
 import { sessionCommand } from "./session-search.js";
 import { autoresearchCommand } from "./autoresearch.js";
 import { mcpParityCommand } from "./mcp-parity.js";
+import { mcpServeCommand } from "./mcp-serve.js";
 import { adaptCommand } from "./adapt.js";
 import {
   MADMAX_FLAG,
@@ -186,6 +187,7 @@ Usage:
   omx code-intel
                 CLI parity for OMX code-intel MCP tools
   omx wiki      CLI parity for OMX wiki MCP tools
+  omx mcp-serve Launch an OMX stdio MCP server target (plugin/runtime use)
   omx sparkshell <command> [args...]
   omx sparkshell --tmux-pane <pane-id> [--tail-lines <100-1000>]
                 Run native sparkshell sidecar for direct command execution or explicit tmux-pane summarization
@@ -292,6 +294,7 @@ type CliCommand =
   | "hud"
   | "state"
   | "wiki"
+  | "mcp-serve"
   | "status"
   | "cancel"
   | "help"
@@ -312,6 +315,7 @@ const NESTED_HELP_COMMANDS = new Set<CliCommand>([
   "hud",
   "state",
   "wiki",
+  "mcp-serve",
   "ralph",
   "resume",
   "session",
@@ -618,6 +622,7 @@ export async function main(args: string[]): Promise<void> {
     "hooks",
     "hud",
     "state",
+    "mcp-serve",
     "status",
     "cancel",
     "help",
@@ -737,6 +742,9 @@ export async function main(args: string[]): Promise<void> {
         break;
       case "wiki":
         await mcpParityCommand("wiki", args.slice(1));
+        break;
+      case "mcp-serve":
+        await mcpServeCommand(args.slice(1));
         break;
       case "tmux-hook":
         await tmuxHookCommand(args.slice(1));
