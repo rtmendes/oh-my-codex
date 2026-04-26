@@ -119,32 +119,47 @@ async function writePostToolUseEvidence(params: {
   });
 }
 
-async function appendPostToolUseEvent(params: {
-  stateRoot: string;
-  teamName: string;
-  workerName: string;
-  nowIso: string;
-  dedupeKey: string;
-  toolUseId: string;
-  cwd: string;
-}): Promise<void> {
-  const eventsPath = join(params.stateRoot, "team", params.teamName, "events", "events.ndjson");
-  await mkdir(join(params.stateRoot, "team", params.teamName, "events"), { recursive: true });
-  const event = {
-    event_id: randomUUID(),
-    team: params.teamName,
-    type: "worker_posttooluse_success",
-    worker: params.workerName,
-    reason: "successful_bash_posttooluse",
-    source_type: "native-posttooluse",
-    metadata: {
-      dedupe_key: params.dedupeKey,
-      tool_use_id: params.toolUseId || null,
-      cwd: params.cwd,
-    },
-    created_at: params.nowIso,
-  };
-  await appendFile(eventsPath, `${JSON.stringify(event)}\n`, "utf-8");
+async function checkpointIfEligible(cwd: string, workerName: string): Promise<{
+  status: PostToolUseStatus;
+  reason?: string;
+  checkpointCommit: string | null;
+  workerHeadAfter: string | null;
+}> {
+  const inProgress = await hasGitOperationInProgress(cwd);
+  if (inProgress) {
+    return { status: inProgress === 'not_git_repository' ? 'skipped' : 'skipped', reason: inProgress, checkpointCommit: null, workerHeadAfter: await gitHead(cwd) };
+  }
+
+  const unmerged = await git(cwd, ['diff', '--name-only', '--diff-filter=U']);
+  if (unmerged.trim()) {
+    return { status: 'conflict', reason: 'unmerged_paths', checkpointCommit: null, workerHeadAfter: await gitHead(cwd) };
+  }
+
+  const status = await git(cwd, ['status', '--porcelain=v1', '-uall']);
+  const paths = parsePorcelainPaths(status);
+  if (paths.length === 0) {
+    return { status: 'noop', checkpointCommit: null, workerHeadAfter: await gitHead(cwd) };
+  }
+
+  const checkpointable = paths.filter((path) => !isProtectedCheckpointPath(path));
+  if (checkpointable.length === 0) {
+    const onlyHookState = paths.every((path) => path.replace(/\\/g, '/').startsWith('.omx/state/'));
+    return onlyHookState
+      ? { status: 'noop', checkpointCommit: null, workerHeadAfter: await gitHead(cwd) }
+      : { status: 'skipped', reason: 'only_protected_paths_changed', checkpointCommit: null, workerHeadAfter: await gitHead(cwd) };
+  }
+
+  const addResult = await gitMaybe(cwd, ['add', '--', ...checkpointable]);
+  if (!addResult.ok) return { status: 'skipped', reason: `git_add_failed:${addResult.stderr.slice(0, 120)}`, checkpointCommit: null, workerHeadAfter: await gitHead(cwd) };
+
+  const commitResult = await gitMaybe(cwd, ['commit', '--no-verify', '-m', `omx(team): auto-checkpoint ${workerName}`]);
+  if (!commitResult.ok) {
+    const reason = commitResult.stderr.includes('conflict') ? 'git_commit_conflict' : `git_commit_failed:${commitResult.stderr.slice(0, 120)}`;
+    return { status: reason.includes('conflict') ? 'conflict' : 'skipped', reason, checkpointCommit: null, workerHeadAfter: await gitHead(cwd) };
+  }
+
+  const head = await gitHead(cwd);
+  return { status: 'applied', checkpointCommit: head, workerHeadAfter: head };
 }
 
 async function logBridgeFailure(cwd: string, reason: string): Promise<void> {
