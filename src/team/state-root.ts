@@ -72,16 +72,18 @@ function pathIsSameOrInside(candidate: string, parent: string): boolean {
   return rel !== '' && !rel.startsWith('..') && rel !== '..' && !rel.startsWith(`..${sep}`);
 }
 
-async function cwdMatchesIdentityWorktree(cwd: string, identity: JsonRecord): Promise<string | null> {
+async function cwdMatchesIdentityWorktree(cwd: string, identity: JsonRecord): Promise<{ matches: boolean; worktreePath?: string }> {
   const worktreePath = metadataStateRoot(identity.worktree_path);
-  if (!worktreePath) return null;
+  if (!worktreePath) return { matches: true };
 
   const [normalizedCwd, normalizedWorktree] = await Promise.all([
     normalizePath(cwd),
     normalizePath(worktreePath),
   ]);
 
-  return pathIsSameOrInside(normalizedCwd, normalizedWorktree) ? normalizedWorktree : null;
+  return pathIsSameOrInside(normalizedCwd, normalizedWorktree)
+    ? { matches: true, worktreePath: normalizedWorktree }
+    : { matches: false, worktreePath: normalizedWorktree };
 }
 
 async function validateWorkerStateRoot(
@@ -120,14 +122,15 @@ async function validateWorkerStateRoot(
     };
   }
 
-  const worktreePath = await cwdMatchesIdentityWorktree(cwd, identity);
-  if (!worktreePath) {
+  const worktreeMatch = await cwdMatchesIdentityWorktree(cwd, identity);
+  if (!worktreeMatch.matches) {
     return {
       ok: false,
       stateRoot: null,
       source: null,
       reason: 'identity_worktree_mismatch',
       identityPath,
+      worktreePath: worktreeMatch.worktreePath,
     };
   }
 
@@ -136,7 +139,7 @@ async function validateWorkerStateRoot(
     stateRoot: resolvedStateRoot,
     source: null,
     identityPath,
-    worktreePath,
+    worktreePath: worktreeMatch.worktreePath,
   };
 }
 
@@ -170,7 +173,7 @@ async function readMetadataRootFromValidatedCandidate(
  * Resolve the canonical team state root for an OMX team worker hook.
  *
  * This resolver is intentionally fail-closed: every successful source must have
- * a valid worker identity whose worktree path matches the hook cwd/current
+ * a valid worker identity and, when present, whose worktree path matches the hook cwd/current
  * worktree. It prevents hooks running inside worker worktrees from guessing a
  * local `.omx/state` root and writing cross-worker runtime state in the wrong
  * place.
