@@ -2,11 +2,17 @@ import { strict as assert } from "assert";
 import { mkdir, mkdtemp, readFile, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { handleTeamWorkerPostToolUseSuccess } from "../team-worker-posttooluse.js";
 import { dispatchCodexNativeHook } from "../../codex-native-hook.js";
 
 const ORIGINAL_ENV = { ...process.env };
+
+beforeEach(() => {
+  delete process.env.OMX_TEAM_WORKER;
+  delete process.env.OMX_TEAM_STATE_ROOT;
+  delete process.env.OMX_TEAM_LEADER_CWD;
+});
 
 afterEach(() => {
   process.env = { ...ORIGINAL_ENV };
