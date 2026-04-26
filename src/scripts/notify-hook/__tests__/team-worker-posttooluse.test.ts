@@ -1,129 +1,109 @@
-import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
-import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { handleTeamWorkerPostToolUseSuccess, teamWorkerPostToolUseInternals } from '../team-worker-posttooluse.js';
+import { strict as assert } from "assert";
+import { mkdir, mkdtemp, readFile, writeFile } from "fs/promises";
+import { join } from "path";
+import { tmpdir } from "os";
+import { afterEach, beforeEach, describe, it } from "node:test";
+import { handleTeamWorkerPostToolUseSuccess } from "../team-worker-posttooluse.js";
+import { dispatchCodexNativeHook } from "../../codex-native-hook.js";
 
-async function initWorkerFixture(): Promise<{ cwd: string; stateRoot: string; env: NodeJS.ProcessEnv }> {
-  const cwd = await mkdtemp(join(tmpdir(), 'omx-posttooluse-worker-'));
-  execFileSync('git', ['init'], { cwd, stdio: 'ignore' });
-  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd, stdio: 'ignore' });
-  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd, stdio: 'ignore' });
-  await writeFile(join(cwd, 'README.md'), 'hello\n', 'utf-8');
-  execFileSync('git', ['add', 'README.md'], { cwd, stdio: 'ignore' });
-  execFileSync('git', ['commit', '-m', 'init'], { cwd, stdio: 'ignore' });
+const ORIGINAL_ENV = { ...process.env };
 
-  const stateRoot = join(cwd, '.omx', 'state');
-  const workerDir = join(stateRoot, 'team', 'demo-team', 'workers', 'worker-1');
-  await mkdir(workerDir, { recursive: true });
-  await writeFile(join(workerDir, 'identity.json'), JSON.stringify({
-    name: 'worker-1',
+beforeEach(() => {
+  delete process.env.OMX_TEAM_WORKER;
+  delete process.env.OMX_TEAM_STATE_ROOT;
+  delete process.env.OMX_TEAM_LEADER_CWD;
+});
+
+afterEach(() => {
+  process.env = { ...ORIGINAL_ENV };
+});
+
+async function writeJson(path: string, value: unknown): Promise<void> {
+  await mkdir(join(path, ".."), { recursive: true });
+  await writeFile(path, JSON.stringify(value, null, 2));
+}
+
+async function setupWorkerState(): Promise<{ cwd: string; stateRoot: string; teamName: string; workerName: string }> {
+  const root = await mkdtemp(join(tmpdir(), "omx-posttooluse-worker-"));
+  const cwd = join(root, "worktree");
+  const stateRoot = join(root, "state");
+  const teamName = "ptu-team";
+  const workerName = "worker-2";
+  await mkdir(cwd, { recursive: true });
+  await writeJson(join(stateRoot, "team", teamName, "workers", workerName, "identity.json"), {
+    name: workerName,
+    team_name: teamName,
     team_state_root: stateRoot,
     worktree_path: cwd,
-  }, null, 2), 'utf-8');
-  await writeFile(join(stateRoot, 'team', 'demo-team', 'phase.json'), JSON.stringify({ current_phase: 'team-exec' }, null, 2), 'utf-8');
-  await writeFile(join(stateRoot, 'team', 'demo-team', 'config.json'), JSON.stringify({ leader_head: 'leader-head' }, null, 2), 'utf-8');
+  });
+  process.env.OMX_TEAM_WORKER = `${teamName}/${workerName}`;
+  process.env.OMX_TEAM_STATE_ROOT = stateRoot;
+  return { cwd, stateRoot, teamName, workerName };
+}
+
+function successPayload(): Record<string, unknown> {
   return {
-    cwd,
-    stateRoot,
-    env: {
-      ...process.env,
-      OMX_TEAM_WORKER: 'demo-team/worker-1',
-      OMX_TEAM_STATE_ROOT: stateRoot,
-    },
+    hook_event_name: "PostToolUse",
+    tool_name: "Bash",
+    tool_use_id: "tool-1",
+    tool_input: { command: "echo ok" },
+    tool_response: { exit_code: 0, stdout: "ok\n" },
   };
 }
 
-const successPayload = {
-  hook_event_name: 'PostToolUse',
-  tool_name: 'Bash',
-  tool_response: { exit_code: 0 },
-  tool_use_id: 'tool-1',
-};
+describe("team worker PostToolUse bridge", () => {
+  it("skips non-worker and non-success cases without guessed state writes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omx-posttooluse-skip-"));
+    const missingWorker = await handleTeamWorkerPostToolUseSuccess(successPayload(), root);
+    assert.equal(missingWorker.handled, false);
+    assert.equal(missingWorker.status, "skipped");
+    assert.equal(missingWorker.reason, "missing_worker_identity");
 
-describe('handleTeamWorkerPostToolUseSuccess', () => {
-  it('creates a safe worker checkpoint, ledger entries, leader signal, and dedupe marker', async () => {
-    const fixture = await initWorkerFixture();
-    await writeFile(join(fixture.cwd, 'feature.txt'), 'feature\n', 'utf-8');
+    process.env.OMX_TEAM_WORKER = "ptu-team/worker-2";
+    process.env.OMX_TEAM_STATE_ROOT = join(root, "state");
+    const failed = await handleTeamWorkerPostToolUseSuccess({
+      ...successPayload(),
+      tool_response: { exit_code: 1, stderr: "boom" },
+    }, root);
+    assert.equal(failed.handled, false);
+    assert.equal(failed.reason, "nonzero_exit");
+  });
 
-    const result = await handleTeamWorkerPostToolUseSuccess(successPayload, fixture.cwd, fixture.env);
+  it("records worker-local heartbeat and evidence for successful Bash PostToolUse", async () => {
+    const { cwd, stateRoot, teamName, workerName } = await setupWorkerState();
+
+    const result = await handleTeamWorkerPostToolUseSuccess(successPayload(), cwd);
 
     assert.equal(result.handled, true);
-    assert.equal(result.status, 'applied');
-    assert.ok(result.checkpointCommit);
-    assert.deepEqual(result.operationKinds, ['auto_checkpoint', 'leader_integration_attempt']);
+    assert.equal(result.status, "noop");
+    assert.equal(result.teamName, teamName);
+    assert.equal(result.workerName, workerName);
+    assert.equal(result.stateRoot, stateRoot);
+    assert.equal(result.operationKinds.length, 0);
+    assert.match(result.dedupeKey ?? "", /^posttooluse:ptu-team:worker-2:/);
 
-    const log = execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: fixture.cwd, encoding: 'utf-8' }).trim();
-    assert.equal(log, 'omx(team): auto-checkpoint worker-1');
+    const heartbeat = JSON.parse(await readFile(join(stateRoot, "team", teamName, "workers", workerName, "heartbeat.json"), "utf-8"));
+    assert.equal(heartbeat.alive, true);
+    assert.equal(heartbeat.source, "posttooluse");
+    assert.equal(heartbeat.turn_count, 1);
+    assert.equal(typeof heartbeat.last_post_tool_use_at, "string");
 
-    const eventsRaw = await readFile(join(fixture.stateRoot, 'team', 'demo-team', 'events', 'events.ndjson'), 'utf-8');
-    const event = JSON.parse(eventsRaw.trim()) as Record<string, unknown>;
-    assert.equal(event.type, 'worker_integration_attempt_requested');
-    assert.equal(event.operation_kind, 'leader_integration_attempt');
-    assert.equal(event.outcome_status, 'applied');
-    assert.equal(event.source, 'posttooluse');
-    assert.equal(event.dedupe_key, result.dedupeKey);
+    const evidence = JSON.parse(await readFile(join(stateRoot, "team", teamName, "workers", workerName, "posttooluse.json"), "utf-8"));
+    assert.equal(evidence.last_success.tool_use_id, "tool-1");
+    assert.equal(evidence.last_success.command, "echo ok");
 
-    const dedupe = JSON.parse(await readFile(join(fixture.stateRoot, 'team', 'demo-team', 'workers', 'worker-1', 'posttooluse-dedupe.json'), 'utf-8')) as { keys: string[] };
-    assert.equal(dedupe.keys.includes(result.dedupeKey!), true);
-
-    const ledger = JSON.parse(await readFile(join(fixture.cwd, '.omx', 'reports', 'team-commit-hygiene', 'demo-team.ledger.json'), 'utf-8')) as { entries: Array<{ operation: string; status: string }> };
-    assert.equal(ledger.entries.some((entry) => entry.operation === 'auto_checkpoint' && entry.status === 'applied'), true);
-    assert.equal(ledger.entries.some((entry) => entry.operation === 'leader_integration_attempt' && entry.status === 'applied'), true);
+    const events = await readFile(join(stateRoot, "team", teamName, "events", "events.ndjson"), "utf-8");
+    assert.match(events, /worker_posttooluse_success/);
   });
 
-  it('records noop without creating a checkpoint commit', async () => {
-    const fixture = await initWorkerFixture();
-    const before = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fixture.cwd, encoding: 'utf-8' }).trim();
+  it("central native hook dispatch awaits the bridge after normal PostToolUse output", async () => {
+    const { cwd, stateRoot, teamName, workerName } = await setupWorkerState();
 
-    const result = await handleTeamWorkerPostToolUseSuccess(successPayload, fixture.cwd, fixture.env);
+    const result = await dispatchCodexNativeHook({ ...successPayload(), cwd }, { cwd });
 
-    const after = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fixture.cwd, encoding: 'utf-8' }).trim();
-    assert.equal(result.status, 'noop');
-    assert.equal(result.checkpointCommit, null);
-    assert.equal(after, before);
-  });
-
-  it('skips protected runtime-only changes', async () => {
-    const fixture = await initWorkerFixture();
-    await writeFile(join(fixture.cwd, 'AGENTS.md'), 'generated worker instructions\n', 'utf-8');
-
-    const result = await handleTeamWorkerPostToolUseSuccess(successPayload, fixture.cwd, fixture.env);
-
-    assert.equal(result.status, 'skipped');
-    assert.equal(result.reason, 'only_protected_paths_changed');
-    assert.equal(result.checkpointCommit, null);
-  });
-
-  it('exports canonical dedupe and protected-path helpers for fallback suppression', () => {
-    const key = teamWorkerPostToolUseInternals.buildDedupeKey({
-      teamName: 'team',
-      workerName: 'worker-1',
-      workerHeadBefore: 'before',
-      workerHeadAfter: 'after',
-      checkpointCommit: 'checkpoint',
-      leaderHeadObserved: 'leader',
-      operationKind: 'leader_integration_attempt',
-      outcomeStatus: 'applied',
-    });
-    assert.equal(key, 'team|worker-1|before|after|checkpoint|leader|leader_integration_attempt|applied');
-    assert.equal(teamWorkerPostToolUseInternals.isProtectedCheckpointPath('.omx/state/team/x'), true);
-    assert.equal(teamWorkerPostToolUseInternals.isProtectedCheckpointPath('src/index.ts'), false);
-  });
-
-  it('fails closed for missing worker identity without guessed state writes', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'omx-posttooluse-missing-identity-'));
-    const result = await handleTeamWorkerPostToolUseSuccess(successPayload, cwd, {
-      ...process.env,
-      OMX_TEAM_WORKER: 'demo-team/worker-1',
-      OMX_TEAM_STATE_ROOT: join(cwd, '.omx', 'state'),
-    });
-
-    assert.equal(result.handled, false);
-    assert.equal(result.status, 'skipped');
-    assert.equal(existsSync(join(cwd, '.omx', 'state', 'team')), false);
+    assert.equal(result.hookEventName, "PostToolUse");
+    assert.equal(result.outputJson, null);
+    const evidence = JSON.parse(await readFile(join(stateRoot, "team", teamName, "workers", workerName, "posttooluse.json"), "utf-8"));
+    assert.equal(evidence.last_success.tool_use_id, "tool-1");
   });
 });
