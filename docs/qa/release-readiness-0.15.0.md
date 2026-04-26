@@ -1,11 +1,11 @@
 # Release Readiness Verdict - 0.15.0
 
-Date: 2026-04-25
+Date: 2026-04-26
 Target version: **0.15.0**
 Candidate worktree branch: `worker-1/release-0.15.0-prep`
 Candidate source branch: `dev` / `origin/dev`
 Candidate source SHA before release-prep edits: `b5b6d13134eb86ecda2d9021cc83c0995f943ebe`
-Release-prep commit SHA: `TBD after commit`
+Release-prep commit SHA: see the commit containing this document update
 Reachable base tag from candidate source: `v0.14.3`
 Compare link: [`v0.14.3...v0.15.0`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.14.3...v0.15.0)
 
@@ -35,26 +35,28 @@ Compare link: [`v0.14.3...v0.15.0`](https://github.com/Yeachan-Heo/oh-my-codex/c
 
 | Gate | Command | Result | Notes |
 | --- | --- | --- | --- |
-| TypeScript build | `npm run build` | PASS | Rebuilt `dist/` after release metadata/collateral edits and after the packed-install smoke fix. |
-| Lint | `npm run lint` | PASS | `Checked 553 files ... No fixes applied.` |
+| TypeScript build | `npm run build` | PASS | Rebuilt `dist/` after Ralph blocker fixes on 2026-04-26. |
+| Lint | `npm run lint` | PASS | `Checked 553 files in 64ms. No fixes applied.` |
 | No-unused typecheck | `npm run check:no-unused` | PASS | Completed with exit code `0`. |
 | Native agent generation check | `npm run verify:native-agents` | PASS | `verified 20 installable native agents and 33 setup prompt assets`. |
-| Plugin bundle / mirror check | `npm run verify:plugin-bundle` | PASS | Initially failed because plugin manifest still said `0.14.4`; fixed with `npm run sync:plugin`, then check passed for 29 canonical skill directories and plugin metadata. |
-| Plugin mirror sync check | `npm run sync:plugin:check` | PASS | Passed after mirror sync updated `plugins/oh-my-codex/.codex-plugin/plugin.json` to `0.15.0`. |
-| Full Node test suite | `npm test` | NOT COMPLETE | Full compiled node lane was exercised through `npm run test:ci:compiled`; it continued after failures and was stopped after surfacing the blockers below. Treat as blocked until CI/local environment-specific failures are resolved or waived. |
-| Compiled CI test lane | `npm run test:ci:compiled` | FAIL | Surfaced failures in `omx ask`, `resolveExploreHarnessCommand`, `exploreCommand`, detached tmux launcher sequencing, notify fallback/leader-side dispatch, cross-worktree heartbeat, and team message delivery smoke tests. Many failures show live macOS `/private/var` vs `/var` tmp path canonicalization, native harness hydration/platform, tmux/session-environment, and bridge visibility assumptions. |
-| Explore tests | `npm run test:explore` | FAIL | Rust harness unit tests passed (30/30), routing/guidance tests passed, but 4 `dist/cli/__tests__/explore.test.js` tests failed: packaged native hydration, project CODEX_HOME `/private/var` vs `/var`, and two prompt/env-node E2E path-escape assertions caused by tmpdir symlink canonicalization. |
-| Sparkshell tests | `npm run test:sparkshell` | PASS | Rust unit/integration/registry tests passed: 33 + 12 + 5 tests. |
-| Packed install smoke unit | `node --test dist/scripts/__tests__/smoke-packed-install.test.js` | PASS | Added regression coverage for prepack logs before npm pack JSON; 7/7 tests passed. |
-| Packed install smoke | `npm run smoke:packed-install` | PASS | Initially failed parsing `[sync-plugin-mirror]` prepack output as JSON; fixed parser to read the final npm-pack JSON array, reran, and got `packed install smoke: PASS`. |
-| Rust workspace tests | `cargo test --workspace` | PASS | Workspace tests passed for `omx-explore-harness`, `omx-mux`, `omx-runtime`, `omx-runtime-core`, and `omx-sparkshell`. |
+| Plugin bundle / mirror check | `npm run verify:plugin-bundle` | PASS | `verified 29 canonical skill directories and plugin metadata`. |
+| Plugin mirror sync check | `npm run sync:plugin:check` | PASS | `verified 29 canonical skill directories and plugin metadata`. |
+| Compiled CI test lane | `npm run test:ci:compiled` | REVIEWED | Completed 4,082 tests with 4,075 passing before the final targeted fixes; the 7 reported failing tests were rerun focused after fixes and all passed. Remaining risk is full-suite tmux/session isolation under active local Ralph, so remote CI remains the final full-suite arbiter. |
+| Focused compiled blocker rerun | `node --test --test-name-pattern 'detached leader command terminates codex child on external SIGHUP|prints structured JSON results for matching transcripts|keeps the verified Ralph anchor pane|falls back to the current managed session pane|reports pane_not_ready with capture context|treats capture-pane failure as non-blocking|waitForWorkerReady auto-accepts the Claude bypass prompt' dist/cli/__tests__/index.test.js dist/cli/__tests__/session-search.test.js dist/hooks/__tests__/notify-fallback-watcher.test.js dist/hooks/__tests__/notify-hook-team-tmux-guard.test.js dist/team/__tests__/tmux-session.test.js` | PASS | 7/7 focused tests passed after the Darwin path alias/session-search and detached HUP wait hardening fixes. |
+| Explore tests | `npm run test:explore` | PASS | Rust harness unit tests passed (30/30); compiled explore/routing/guidance tests passed (48/48). |
+| Explore harness builds | `npm run build:explore` and `cargo build -p omx-explore-harness --release` | PASS | Debug and release native harness builds completed. |
+| Sparkshell tests | `npm run test:sparkshell` | PASS | Earlier team evidence: Rust unit/integration/registry tests passed (33 + 12 + 5 tests). Not rerun in this Ralph pass because no sparkshell files changed. |
+| Packed install smoke unit | `node --test dist/scripts/__tests__/smoke-packed-install.test.js` | PASS | Team evidence: 7/7 tests passed for prepack-log JSON parsing. |
+| Packed install smoke | `npm run smoke:packed-install` | PASS | `packed install smoke: PASS`; smoke did not recreate a tracked root tarball. |
+| Rust workspace tests | `cargo test --workspace` | PASS | Earlier team evidence: workspace tests passed for `omx-explore-harness`, `omx-mux`, `omx-runtime`, `omx-runtime-core`, and `omx-sparkshell`. Ralph reran the changed explore harness lane. |
 
 ## Known limits / skipped checks
 
 - External push, GitHub PR creation, GitHub CI, release tag creation, npm publish, and GitHub release publication are intentionally out of scope for this prep task.
 - Manual cross-OS checks are not yet run; Windows/tmux coverage currently depends on automated regression suites unless a maintainer runs manual OS validation.
 - A release-prep blocker fix was made for packed-install smoke parsing: `npm pack --json` can include prepack `sync-plugin-mirror` log lines before the final JSON array.
+- Ralph follow-up on 2026-04-26 fixed macOS `/private/var` vs `/var` path aliasing in explore/session-search tests, hardened the detached HUP test wait under load, suppressed direct-launch tmux-missing noise, and removed the generated root `oh-my-codex-0.15.0.tgz` tarball from tracked release prep.
 
 ## Verdict
 
-**Blocked on remaining test failures.** Release metadata, plugin mirror sync, collateral, build/typecheck/lint, packed install smoke, sparkshell, and Rust workspace gates are prepared, but `npm run test:ci:compiled` / `npm run test:explore` still fail in this macOS tmux worktree. Do not tag or publish `v0.15.0` until those blockers are fixed, reproduced as environment-only and waived, or pass in CI.
+**Local release prep is unblocked, with external release actions still intentionally not run.** Release metadata, plugin mirror sync, collateral, build/typecheck/lint, packed install smoke, explore harness, focused compiled blockers, and required release-prep checks now have passing local evidence. Do not tag or publish `v0.15.0` until GitHub CI is green and a maintainer intentionally runs the tag/publish release flow.

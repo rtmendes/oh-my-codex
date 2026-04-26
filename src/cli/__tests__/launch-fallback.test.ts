@@ -35,6 +35,15 @@ function runOmx(
   };
 }
 
+
+function normalizeDarwinTmpPath(value: string): string {
+  return process.platform === 'darwin' ? value.replaceAll('/private/var/', '/var/') : value;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function shouldSkipForSpawnPermissions(err: string): boolean {
   return typeof err === 'string' && /(EPERM|EACCES)/i.test(err);
 }
@@ -404,9 +413,9 @@ exit 0
 
       if (shouldSkipForSpawnPermissions(result.error)) return;
 
-      const codexLog = await readFile(codexLogPath, 'utf-8');
+      const codexLog = normalizeDarwinTmpPath(await readFile(codexLogPath, 'utf-8'));
       assert.match(codexLog, /codex:.*--dangerously-bypass-approvals-and-sandbox/);
-      assert.match(codexLog, new RegExp(`codex-pwd:${wd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+      assert.match(codexLog, new RegExp(`codex-pwd:${escapeRegExp(normalizeDarwinTmpPath(wd))}`));
       assert.equal(result.status, 0, result.error || result.stderr || result.stdout);
     } finally {
       await rm(wd, { recursive: true, force: true });
@@ -500,11 +509,11 @@ exit 0
       if (shouldSkipForSpawnPermissions(result.error)) return;
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
-      const codexLog = await readFile(codexLogPath, 'utf-8');
+      const codexLog = normalizeDarwinTmpPath(await readFile(codexLogPath, 'utf-8'));
       assert.match(tmuxLog, /\/bin\/sh/);
       assert.doesNotMatch(tmuxLog, /not-a-real-shell/);
       assert.match(codexLog, /codex:.*--dangerously-bypass-approvals-and-sandbox/);
-      assert.match(codexLog, new RegExp(`codex-pwd:${wd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+      assert.match(codexLog, new RegExp(`codex-pwd:${escapeRegExp(normalizeDarwinTmpPath(wd))}`));
       assert.equal(result.status, 0, result.error || result.stderr || result.stdout);
     } finally {
       await rm(wd, { recursive: true, force: true });

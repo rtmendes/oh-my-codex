@@ -886,19 +886,28 @@ fn validate_repo_paths(command_name: &str, args: &[String]) -> Result<(), String
     let candidate_paths = command_path_operands(command_name, args);
     for operand in candidate_paths {
         let normalized = normalize_candidate_path(&repo_root, operand);
-        if !normalized.starts_with(&repo_root) {
+        let canonical_candidate = canonicalize_existing_prefix(&normalized);
+        let is_textually_inside = normalized.starts_with(&repo_root);
+        let is_canonically_inside = match (&canonical_candidate, &canonical_repo_root) {
+            (Some(candidate), Some(root)) => candidate.starts_with(root),
+            _ => false,
+        };
+
+        if !is_textually_inside && !is_canonically_inside {
             return Err(format!(
                 "path `{operand}` escapes the omx explore repository root {}",
                 repo_root.display()
             ));
         }
-        if let Some(canonical_candidate) = canonicalize_existing_prefix(&normalized) {
-            if let Some(canonical_repo_root) = &canonical_repo_root {
-                if !canonical_candidate.starts_with(canonical_repo_root) {
-                    return Err(format!(
-                        "path `{operand}` resolves outside the omx explore repository root {}",
-                        canonical_repo_root.display()
-                    ));
+        if is_textually_inside {
+            if let Some(canonical_candidate) = canonical_candidate {
+                if let Some(canonical_repo_root) = &canonical_repo_root {
+                    if !canonical_candidate.starts_with(canonical_repo_root) {
+                        return Err(format!(
+                            "path `{operand}` resolves outside the omx explore repository root {}",
+                            canonical_repo_root.display()
+                        ));
+                    }
                 }
             }
         }

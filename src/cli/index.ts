@@ -484,6 +484,17 @@ function hasErrnoCode(error: unknown, code: string): boolean {
   );
 }
 
+
+function isMissingTmuxLaunchNoise(error: unknown): boolean {
+  return error instanceof Error && /spawnSync tmux ENOENT/i.test(error.message);
+}
+
+function logCliOperationFailure(error: unknown): void {
+  if (isMissingTmuxLaunchNoise(error)) return;
+  process.stderr.write(`[cli/index] operation failed: ${error}
+`);
+}
+
 function tmuxFailureMessage(error: unknown): string {
   if (!error || typeof error !== "object") return String(error);
   const err = error as ExecFileSyncFailure & {
@@ -890,7 +901,7 @@ async function showStatus(): Promise<void> {
       try {
         state = JSON.parse(content) as Record<string, unknown>;
       } catch (err) {
-        process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+        logCliOperationFailure(err);
         continue;
       }
       const file = basename(path);
@@ -900,7 +911,7 @@ async function showStatus(): Promise<void> {
       );
     }
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     console.log("No active modes.");
   }
 }
@@ -1028,14 +1039,14 @@ export async function launchWithHud(args: string[]): Promise<void> {
   try {
     await maybeCheckAndPromptUpdate(cwd);
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal: update checks must never block launch
   }
 
   try {
     await maybePromptGithubStar();
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal: star prompt must never block launch
   }
 
@@ -1129,13 +1140,13 @@ export async function execWithOverlay(args: string[]): Promise<void> {
   try {
     await maybeCheckAndPromptUpdate(cwd);
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
   }
 
   try {
     await maybePromptGithubStar();
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
   }
 
   try {
@@ -1558,7 +1569,7 @@ export function detectDetachedSessionWindowIndex(sessionName: string): string | 
     );
     return parseWindowIndexFromTmuxOutput(output);
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     return null;
   }
 }
@@ -1567,9 +1578,18 @@ function escapeShellDoubleQuotedValue(value: string): string {
   return value.replace(/["\\$`]/g, "\\$&");
 }
 
+interface TmuxExtendedKeysLeaseHolderRecord {
+  id: string;
+  pid: number;
+  platform?: NodeJS.Platform;
+  linuxStartTicks?: number;
+}
+
+type TmuxExtendedKeysLeaseHolder = string | TmuxExtendedKeysLeaseHolderRecord;
+
 interface TmuxExtendedKeysLeaseState {
   originalMode: string;
-  holders: string[];
+  holders: TmuxExtendedKeysLeaseHolder[];
 }
 
 function sanitizeTmuxLeaseKey(value: string): string {
@@ -1610,6 +1630,27 @@ function tmuxExtendedKeysLeasePath(cwd: string, socketPath: string): string {
   );
 }
 
+function isTmuxExtendedKeysLeaseHolderRecord(
+  holder: unknown,
+): holder is TmuxExtendedKeysLeaseHolderRecord {
+  if (!holder || typeof holder !== "object") return false;
+  const record = holder as Record<string, unknown>;
+  if (typeof record.id !== "string" || !record.id.trim()) return false;
+  if (!Number.isSafeInteger(record.pid) || Number(record.pid) <= 0) return false;
+  if (record.platform !== undefined && typeof record.platform !== "string") return false;
+  if (
+    record.linuxStartTicks !== undefined &&
+    !Number.isSafeInteger(record.linuxStartTicks)
+  ) return false;
+  return true;
+}
+
+function isTmuxExtendedKeysLeaseHolder(
+  holder: unknown,
+): holder is TmuxExtendedKeysLeaseHolder {
+  return typeof holder === "string" || isTmuxExtendedKeysLeaseHolderRecord(holder);
+}
+
 function readTmuxExtendedKeysLeaseState(
   leasePath: string,
 ): TmuxExtendedKeysLeaseState | null {
@@ -1622,7 +1663,7 @@ function readTmuxExtendedKeysLeaseState(
     if (
       typeof parsed.originalMode !== "string" ||
       !Array.isArray(parsed.holders) ||
-      !parsed.holders.every((holder) => typeof holder === "string")
+      !parsed.holders.every(isTmuxExtendedKeysLeaseHolder)
     ) {
       return null;
     }
@@ -1641,6 +1682,92 @@ function writeTmuxExtendedKeysLeaseState(
 ): void {
   mkdirSync(dirname(leasePath), { recursive: true });
   writeFileSync(leasePath, JSON.stringify(state, null, 2));
+}
+
+function parseTmuxExtendedKeysLeaseHolderPid(holder: string): number | null {
+  const match = /^([1-9]\d*)-/.exec(holder);
+  if (!match) return null;
+  const pid = Number.parseInt(match[1], 10);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+function getTmuxExtendedKeysLeaseHolderId(holder: TmuxExtendedKeysLeaseHolder): string {
+  return typeof holder === "string" ? holder : holder.id;
+}
+
+function getTmuxExtendedKeysLeaseHolderPid(holder: TmuxExtendedKeysLeaseHolder): number | null {
+  if (typeof holder === "string") return parseTmuxExtendedKeysLeaseHolderPid(holder);
+  return Number.isSafeInteger(holder.pid) && holder.pid > 0 ? holder.pid : null;
+}
+
+function parseLinuxProcStartTicks(statContent: string): number | null {
+  const commandEnd = statContent.lastIndexOf(")");
+  if (commandEnd === -1) return null;
+
+  const remainder = statContent.slice(commandEnd + 1).trim();
+  const fields = remainder.split(/\s+/);
+  if (fields.length <= 19) return null;
+
+  const startTicks = Number(fields[19]);
+  return Number.isSafeInteger(startTicks) ? startTicks : null;
+}
+
+function readLinuxProcessStartTicks(pid: number): number | null {
+  try {
+    return parseLinuxProcStartTicks(readFileSync(`/proc/${pid}/stat`, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+function createTmuxExtendedKeysLeaseHolder(
+  id: string,
+  pid: number,
+): TmuxExtendedKeysLeaseHolderRecord {
+  const linuxStartTicks = process.platform === "linux"
+    ? readLinuxProcessStartTicks(pid) ?? undefined
+    : undefined;
+  return {
+    id,
+    pid,
+    platform: process.platform,
+    ...(linuxStartTicks !== undefined ? { linuxStartTicks } : {}),
+  };
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code =
+      err && typeof err === "object" && "code" in err
+        ? String((err as NodeJS.ErrnoException).code)
+        : "";
+    return code === "EPERM";
+  }
+}
+
+function isTmuxExtendedKeysLeaseHolderAlive(
+  holder: TmuxExtendedKeysLeaseHolder,
+): boolean {
+  const pid = getTmuxExtendedKeysLeaseHolderPid(holder);
+  if (pid === null || !isProcessAlive(pid)) return false;
+
+  if (typeof holder === "string") return true;
+  if (holder.platform !== "linux" || process.platform !== "linux") return true;
+  if (holder.linuxStartTicks === undefined) return true;
+
+  return readLinuxProcessStartTicks(pid) === holder.linuxStartTicks;
+}
+
+function reapDeadTmuxExtendedKeysLeaseHolders(
+  state: TmuxExtendedKeysLeaseState,
+): TmuxExtendedKeysLeaseState {
+  return {
+    originalMode: state.originalMode,
+    holders: state.holders.filter(isTmuxExtendedKeysLeaseHolderAlive),
+  };
 }
 
 function withTmuxExtendedKeysLeaseLock<T>(
@@ -1743,13 +1870,24 @@ export function acquireTmuxExtendedKeysLease(
       encoding: "utf-8",
       ...(process.platform === "win32" ? { windowsHide: true } : {}),
     }) as string,
+  ownerPid = process.pid,
 ): string | null {
   try {
     const socketPath = resolveTmuxSocketPath(execFileSyncImpl);
     const leasePath = tmuxExtendedKeysLeasePath(cwd, socketPath);
-    const leaseId = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const holderPid =
+      Number.isSafeInteger(ownerPid) && ownerPid > 0 ? ownerPid : process.pid;
+    const leaseId = `${holderPid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     withTmuxExtendedKeysLeaseLock(cwd, socketPath, () => {
-      const state = readTmuxExtendedKeysLeaseState(leasePath);
+      const stateRaw = readTmuxExtendedKeysLeaseState(leasePath);
+      const state = stateRaw ? reapDeadTmuxExtendedKeysLeaseHolders(stateRaw) : null;
+      if (stateRaw && state?.holders.length === 0) {
+        execTmuxSync(
+          ["set-option", "-sq", "extended-keys", state.originalMode],
+          execFileSyncImpl,
+        );
+        rmSync(leasePath, { force: true });
+      }
       if (!state || state.holders.length === 0) {
         const previousMode =
           execTmuxSync(["show-options", "-sv", "extended-keys"], execFileSyncImpl) ||
@@ -1760,17 +1898,17 @@ export function acquireTmuxExtendedKeysLease(
         );
         writeTmuxExtendedKeysLeaseState(leasePath, {
           originalMode: previousMode,
-          holders: [leaseId],
+          holders: [createTmuxExtendedKeysLeaseHolder(leaseId, holderPid)],
         });
         return;
       }
 
-      state.holders.push(leaseId);
+      state.holders.push(createTmuxExtendedKeysLeaseHolder(leaseId, holderPid));
       writeTmuxExtendedKeysLeaseState(leasePath, state);
     });
     return `${socketPath}\t${leaseId}`;
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     return null;
   }
 }
@@ -1792,13 +1930,22 @@ export function releaseTmuxExtendedKeysLease(
   try {
     const leasePath = tmuxExtendedKeysLeasePath(cwd, socketPath);
     withTmuxExtendedKeysLeaseLock(cwd, socketPath, () => {
-      const state = readTmuxExtendedKeysLeaseState(leasePath);
+      const stateRaw = readTmuxExtendedKeysLeaseState(leasePath);
+      const state = stateRaw ? reapDeadTmuxExtendedKeysLeaseHolders(stateRaw) : null;
       if (!state || state.holders.length === 0) {
+        if (stateRaw) {
+          execTmuxSync(
+            ["set-option", "-sq", "extended-keys", stateRaw.originalMode],
+            execFileSyncImpl,
+          );
+        }
         rmSync(leasePath, { force: true });
         return;
       }
 
-      const holders = state.holders.filter((holder) => holder !== leaseId);
+      const holders = state.holders.filter(
+        (holder) => getTmuxExtendedKeysLeaseHolderId(holder) !== leaseId,
+      );
       if (holders.length > 0) {
         writeTmuxExtendedKeysLeaseState(leasePath, {
           originalMode: state.originalMode,
@@ -1814,7 +1961,7 @@ export function releaseTmuxExtendedKeysLease(
       rmSync(leasePath, { force: true });
     });
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
   }
 }
 
@@ -1826,13 +1973,13 @@ function buildTmuxExtendedKeysHelperCommand(
   const moduleUrlLiteral = JSON.stringify(import.meta.url);
   const script =
     operation === "acquire"
-      ? `const mod = await import(${moduleUrlLiteral}); const lease = mod.acquireTmuxExtendedKeysLease(${cwdLiteral}); if (lease) process.stdout.write(lease);`
+      ? `const mod = await import(${moduleUrlLiteral}); const ownerPid = Number.parseInt(process.argv[1] ?? "", 10); const lease = mod.acquireTmuxExtendedKeysLease(${cwdLiteral}, undefined, Number.isSafeInteger(ownerPid) && ownerPid > 0 ? ownerPid : undefined); if (lease) process.stdout.write(lease);`
       : `const mod = await import(${moduleUrlLiteral}); mod.releaseTmuxExtendedKeysLease(${cwdLiteral}, process.argv[1] ?? "");`;
   return `${quoteShellArg(process.execPath)} --input-type=module -e ${quoteShellArg(script)}`;
 }
 
 function buildTmuxExtendedKeysAcquireShellSnippet(cwd: string): string {
-  return `OMX_TMUX_EXTENDED_KEYS_LEASE=$(${buildTmuxExtendedKeysHelperCommand(cwd, "acquire")} 2>/dev/null || true);`;
+  return `OMX_TMUX_EXTENDED_KEYS_LEASE=$(${buildTmuxExtendedKeysHelperCommand(cwd, "acquire")} "$$" 2>/dev/null || true);`;
 }
 
 function buildTmuxExtendedKeysReleaseShellSnippet(cwd: string): string {
@@ -2362,7 +2509,7 @@ async function preLaunch(
       );
     }
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal
   }
 
@@ -2392,7 +2539,7 @@ ${launchAppendix}${dirtyWorktreeGuidance}`
   try {
     await startNotifyFallbackWatcher(cwd, { codexHomeOverride, enableAuthority: enableNotifyFallbackAuthority, sessionId });
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal
   }
 
@@ -2400,7 +2547,7 @@ ${launchAppendix}${dirtyWorktreeGuidance}`
   try {
     await startHookDerivedWatcher(cwd);
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal
   }
 
@@ -2432,7 +2579,7 @@ ${launchAppendix}${dirtyWorktreeGuidance}`
       projectName: basename(cwd),
     });
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal: notification failures must never block launch
   }
 
@@ -2447,7 +2594,7 @@ ${launchAppendix}${dirtyWorktreeGuidance}`
       }),
     });
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal
   }
 }
@@ -2519,7 +2666,7 @@ function runCodex(
     try {
       hudPaneId = createHudWatchPane(cwd, hudCmd);
     } catch (err) {
-      process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+      logCliOperationFailure(err);
       // HUD split failed, continue without it
     }
 
@@ -2537,7 +2684,7 @@ function runCodex(
         }).trim();
         if (tmuxSession) enableMouseScrolling(tmuxSession);
       } catch (err) {
-        process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+        logCliOperationFailure(err);
         // Non-fatal: mouse scrolling is a convenience feature
       }
     }
@@ -2646,7 +2793,7 @@ function runCodex(
               try {
                 mitigateCopyModeUnderlineArtifacts(sessionName);
               } catch (err) {
-                process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+                logCliOperationFailure(err);
               }
               continue;
             }
@@ -2655,7 +2802,7 @@ function runCodex(
             try {
               execTmuxFileSync(finalizeStep.args, { stdio });
             } catch (err) {
-              process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+              logCliOperationFailure(err);
               if (finalizeStep.name === "attach-session")
                 throw new Error("failed to attach detached tmux session");
               continue;
@@ -2678,7 +2825,7 @@ function runCodex(
         }
       }
     } catch (err) {
-      process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+      logCliOperationFailure(err);
       if (createdDetachedSession) {
         const rollbackSteps = buildDetachedSessionRollbackSteps(
           sessionName,
@@ -2690,7 +2837,7 @@ function runCodex(
           try {
             execTmuxFileSync(rollbackStep.args, { stdio: "ignore" });
           } catch (err) {
-            process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+            logCliOperationFailure(err);
             // best-effort rollback only
           }
         }
@@ -2705,7 +2852,7 @@ function listHudWatchPaneIdsInCurrentWindow(currentPaneId?: string): string[] {
   try {
     return listCurrentWindowHudPaneIds(currentPaneId);
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     return [];
   }
 }
@@ -2719,7 +2866,7 @@ function killTmuxPane(paneId: string): void {
   try {
     killSharedTmuxPane(paneId);
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Pane may already be gone; ignore.
   }
 }
@@ -2841,7 +2988,7 @@ async function postLaunch(
     const sessionState = await readSessionState(cwd);
     sessionStartedAt = sessionState?.started_at;
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal
   }
 
@@ -2852,7 +2999,7 @@ async function postLaunch(
   try {
     await flushNotifyFallbackOnce(cwd, { codexHomeOverride, enableAuthority: enableNotifyFallbackAuthority, sessionId });
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal
   }
 
@@ -2860,7 +3007,7 @@ async function postLaunch(
   try {
     await stopNotifyFallbackWatcher(cwd);
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal
   }
 
@@ -2868,7 +3015,7 @@ async function postLaunch(
   try {
     await flushHookDerivedWatcherOnce(cwd);
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal
   }
 
@@ -2876,7 +3023,7 @@ async function postLaunch(
   try {
     await stopHookDerivedWatcher(cwd);
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal
   }
 
@@ -2903,7 +3050,7 @@ async function postLaunch(
     const { onSessionEnd } = await import("../wiki/lifecycle.js");
     onSessionEnd({ cwd, session_id: sessionId });
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal: wiki capture must never block session cleanup
   }
 
@@ -2930,7 +3077,7 @@ async function postLaunch(
       reason: "session_exit",
     });
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal: notification failures must never block session cleanup
   }
 
@@ -2939,7 +3086,7 @@ async function postLaunch(
     const { markOwnedTeamsLeaderSessionStopped } = await import("../team/state.js");
     await markOwnedTeamsLeaderSessionStopped(cwd, sessionId);
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal
   }
 
@@ -2969,7 +3116,7 @@ async function postLaunch(
       }),
     });
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     // Non-fatal
   }
 }
@@ -3507,7 +3654,7 @@ async function cancelModes(): Promise<void> {
       try {
         parsedState = JSON.parse(content) as Record<string, unknown>;
       } catch (err) {
-        process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+        logCliOperationFailure(err);
         continue;
       }
       states.set(ref.mode, {
@@ -3572,7 +3719,7 @@ async function cancelModes(): Promise<void> {
       console.log("No active modes to cancel.");
     }
   } catch (err) {
-    process.stderr.write(`[cli/index] operation failed: ${err}\n`);
+    logCliOperationFailure(err);
     console.log("No active modes to cancel.");
   }
 }
