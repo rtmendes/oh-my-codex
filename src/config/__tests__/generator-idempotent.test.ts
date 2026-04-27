@@ -396,6 +396,53 @@ describe("config generator idempotency (#384)", () => {
     );
   });
 
+  it("seeds the default status_line into an existing [tui] section without one", () => {
+    const toml = buildMergedConfig(
+      ["[tui]", 'theme = "night"', ""].join("\n"),
+      "/tmp/omx",
+    );
+
+    assert.equal(count(toml, /^\[tui\]$/gm), 1, "[tui] should appear once");
+    assert.match(toml, /^theme = "night"$/m, "existing tui key preserved");
+    assert.match(
+      toml,
+      /^status_line = \["model-with-reasoning", "git-branch", "context-remaining", "total-input-tokens", "total-output-tokens", "five-hour-limit", "weekly-limit"\]$/m,
+      "default status_line should be seeded when [tui] lacks one",
+    );
+  });
+
+  it("preserves a multiline user-owned status_line", () => {
+    const toml = buildMergedConfig(
+      [
+        "[tui]",
+        "status_line = [",
+        '  "git-branch",',
+        '  "context-remaining",',
+        "]",
+        "",
+      ].join("\n"),
+      "/tmp/omx",
+    );
+
+    assert.equal(count(toml, /^\[tui\]$/gm), 1, "[tui] should appear once");
+    assert.ok(
+      toml.includes(
+        [
+          "status_line = [",
+          '"git-branch",',
+          '"context-remaining",',
+          "]",
+        ].join("\n"),
+      ),
+      "multiline user status_line should be preserved",
+    );
+    assert.doesNotMatch(
+      toml,
+      /^status_line = \["model-with-reasoning", "git-branch", "context-remaining", "total-input-tokens", "total-output-tokens", "five-hour-limit", "weekly-limit"\]$/m,
+      "default status_line should not overwrite multiline customization",
+    );
+  });
+
   it("preserves a customized managed-block status_line when refreshing setup", () => {
     const firstRun = buildMergedConfig("", "/tmp/omx");
     const customized = firstRun.replace(

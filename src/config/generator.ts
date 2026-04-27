@@ -762,7 +762,15 @@ function upsertTuiStatusLine(config: string): {
 
       const key = keyMatch[1];
       if (key === "status_line") {
-        preservedStatusLine ??= trimmed;
+        const entryLines = [trimmed];
+        while (
+          !parseStandaloneToml(entryLines.join("\n")) &&
+          i + 1 < section.end
+        ) {
+          i += 1;
+          entryLines.push(lines[i].trim());
+        }
+        preservedStatusLine ??= entryLines.join("\n");
         continue;
       }
       if (seenKeys.has(key)) continue;
