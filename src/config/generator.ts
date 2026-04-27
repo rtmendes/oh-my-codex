@@ -91,18 +91,31 @@ export function statusLineForPreset(
   return `status_line = [${fields.map((field) => `"${field}"`).join(", ")}]`;
 }
 
-const OMX_MANAGED_STATUS_LINES: ReadonlySet<string> = new Set(
+// Marker comment OMX emits immediately above any status_line it owns. New writes
+// always include it; the customized-section detector keys on this marker so a
+// user-edited status_line that happens to byte-match a preset literal (e.g.
+// `["model-with-reasoning", "git-branch"]` matching the `minimal` preset) is
+// still recognized as a user customization and preserved.
+const OMX_MANAGED_STATUS_LINE_MARKER = "# omx:managed-status-line";
+
+// Pre-marker installs only ever shipped the seven-field `focused` array.
+// Treat that exact value as OMX-managed for backward compatibility so
+// upgrades/preset switches still strip the legacy line. Any other preset
+// literal without the marker is assumed user-written.
+const LEGACY_OMX_STATUS_LINE = statusLineForPreset(
+  DEFAULT_STATUS_LINE_PRESET,
+);
+
+// Set of every status_line literal OMX itself can emit today. Used together
+// with the marker comment: if a status_line is preceded by the marker AND
+// its value is a known OMX preset, it is OMX-managed. If the marker is
+// present but the value is something else, the user edited the value (and
+// left the marker untouched) — treat as a user customization and preserve.
+const OMX_PRESET_STATUS_LINE_VALUES: ReadonlySet<string> = new Set(
   (Object.keys(STATUS_LINE_PRESETS) as HudPreset[]).map((preset) =>
     statusLineForPreset(preset),
   ),
 );
-
-function isOmxManagedStatusLine(line: string): boolean {
-  return OMX_MANAGED_STATUS_LINES.has(line.trim());
-}
-
-// Backward-compatible alias: equivalent to statusLineForPreset("focused").
-const OMX_TUI_STATUS_LINE = statusLineForPreset(DEFAULT_STATUS_LINE_PRESET);
 const LEGACY_OMX_TEAM_RUN_TABLE_PATTERN =
   /^\s*\[mcp_servers\.(?:"omx_team_run"|omx_team_run)\]\s*$/m;
 const OMX_CONFIG_MARKER = "oh-my-codex (OMX) Configuration";
@@ -736,6 +749,7 @@ function extractCustomizedTuiSectionsFromOmxBlocks(config: string): string[] {
 
       const tuiLines = [blockLines[i].trim()];
       let hasCustomizedStatusLine = false;
+      let lastNonBlankBeforeStatusLine: string | undefined;
 
       for (let j = i + 1; j < blockLines.length; j++) {
         if (/^\s*\[\[?[^\]]+\]?\]\s*$/.test(blockLines[j])) break;
@@ -744,12 +758,27 @@ function extractCustomizedTuiSectionsFromOmxBlocks(config: string): string[] {
         if (!trimmed) continue;
 
         tuiLines.push(trimmed);
-        if (
-          /^status_line\s*=/.test(trimmed) &&
-          !isOmxManagedStatusLine(trimmed)
-        ) {
-          hasCustomizedStatusLine = true;
+        if (/^status_line\s*=/.test(trimmed)) {
+          // OMX-managed when:
+          //   1. Preceded by the managed-status-line marker AND the value is
+          //      a known OMX preset literal (post-marker installs). If the
+          //      marker is present but the value isn't a preset, the user
+          //      edited the value and left the marker — treat as customized.
+          //   2. No marker but the value byte-matches the legacy seven-field
+          //      default (pre-marker installs only ever shipped focused).
+          // Anything else inside an OMX-marker block is treated as a user
+          // customization and preserved across rebuild.
+          const hasMarker =
+            lastNonBlankBeforeStatusLine === OMX_MANAGED_STATUS_LINE_MARKER;
+          const matchesPreset = OMX_PRESET_STATUS_LINE_VALUES.has(trimmed);
+          const isManagedByMarker = hasMarker && matchesPreset;
+          const isManagedByLegacyValue =
+            !hasMarker && trimmed === LEGACY_OMX_STATUS_LINE;
+          if (!isManagedByMarker && !isManagedByLegacyValue) {
+            hasCustomizedStatusLine = true;
+          }
         }
+        lastNonBlankBeforeStatusLine = trimmed;
       }
 
       if (hasCustomizedStatusLine) {
@@ -815,11 +844,18 @@ function upsertTuiStatusLine(
     }
   }
 
-  const mergedSection = [
-    "[tui]",
-    ...preservedKeyLines,
-    preservedStatusLine ?? statusLineForPreset(preset),
-  ];
+  // When OMX is supplying the status_line (no user-preserved value),
+  // emit the managed-status-line marker comment alongside it so the
+  // customized-section detector can unambiguously tell our writes apart
+  // from a user edit on the next merge.
+  const mergedSection = preservedStatusLine
+    ? ["[tui]", ...preservedKeyLines, preservedStatusLine]
+    : [
+        "[tui]",
+        ...preservedKeyLines,
+        OMX_MANAGED_STATUS_LINE_MARKER,
+        statusLineForPreset(preset),
+      ];
   const firstStart = sections[0].start;
   const rebuilt: string[] = [];
 
@@ -1145,6 +1181,7 @@ function getOmxTablesBlock(
           "",
           "# OMX TUI StatusLine (Codex CLI v0.101.0+)",
           "[tui]",
+          OMX_MANAGED_STATUS_LINE_MARKER,
           statusLineForPreset(statusLinePreset),
           "",
         ]
