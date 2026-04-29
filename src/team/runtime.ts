@@ -89,7 +89,10 @@ import {
 } from './mcp-comm.js';
 import { appendTeamDeliveryLogForCwd } from './delivery-log.js';
 import type { TeamReminderIntent } from './reminder-intents.js';
-import type { TeamDecompositionMetadata } from './repo-aware-decomposition.js';
+import {
+  remapRepoAwareDecompositionMetadataToCreatedTasks,
+  type TeamDecompositionMetadata,
+} from './repo-aware-decomposition.js';
 import {
   generateWorkerOverlay,
   writeTeamWorkerInstructionsFile,
@@ -2042,7 +2045,7 @@ export async function startTeam(
   task: string,
   agentType: string,
   workerCount: number,
-  tasks: Array<{ subject: string; description: string; owner?: string; blocked_by?: string[]; depends_on?: string[]; role?: string; delegation?: TeamTask['delegation']; requires_code_change?: boolean; filePaths?: string[]; domains?: string[]; lane?: string; allocation_reason?: string; symbolic_id?: string }>,
+  tasks: Array<{ subject: string; description: string; owner?: string; blocked_by?: string[]; depends_on?: string[]; symbolic_depends_on?: string[]; role?: string; delegation?: TeamTask['delegation']; requires_code_change?: boolean; filePaths?: string[]; domains?: string[]; lane?: string; allocation_reason?: string; symbolic_id?: string }>,
   cwd: string,
   options: TeamStartOptions = {},
 ): Promise<TeamRuntime> {
@@ -2163,15 +2166,19 @@ export async function startTeam(
     config.workspace_mode = workspaceMode;
     config.worktree_mode = effectiveWorktreeMode;
 
-    // 4. Create tasks
+    // 4. Create tasks. Repo-aware DAG dependencies are symbolic until the
+    // state layer returns concrete task IDs, so create those tasks dependency
+    // free and patch runtime dependency fields after ID assignment.
+    const createdTasks: TeamTask[] = [];
     for (const t of tasks) {
-      await createStateTask(sanitized, {
+      const hasSymbolicDagIdentity = Boolean(t.symbolic_id);
+      const created = await createStateTask(sanitized, {
         subject: t.subject,
         description: t.description,
         status: 'pending',
         owner: t.owner,
-        blocked_by: t.blocked_by ?? t.depends_on,
-        depends_on: t.depends_on ?? t.blocked_by,
+        blocked_by: hasSymbolicDagIdentity ? undefined : t.blocked_by ?? t.depends_on,
+        depends_on: hasSymbolicDagIdentity ? undefined : t.depends_on ?? t.blocked_by,
         role: t.role,
         delegation: t.delegation ?? synthesizeDelegationPlan(t),
         requires_code_change: t.requires_code_change,
@@ -2179,6 +2186,27 @@ export async function startTeam(
         domains: t.domains,
         lane: t.lane,
         allocation_reason: t.allocation_reason,
+      }, leaderCwd);
+      createdTasks.push(created);
+    }
+
+    const effectiveDecompositionMetadata = options.decompositionMetadata
+      ? remapRepoAwareDecompositionMetadataToCreatedTasks(options.decompositionMetadata, tasks, createdTasks)
+      : undefined;
+    const nodeIdToTaskId = effectiveDecompositionMetadata?.node_id_to_task_id ?? {};
+    for (let index = 0; index < tasks.length; index += 1) {
+      const planned = tasks[index];
+      if (!planned?.symbolic_id) continue;
+      const created = createdTasks[index];
+      if (!created) continue;
+      const symbolicDeps = planned.symbolic_depends_on
+        ?? effectiveDecompositionMetadata?.node_dependencies?.[planned.symbolic_id]
+        ?? [];
+      const concreteDeps = symbolicDeps.map((dep) => nodeIdToTaskId[dep]).filter(Boolean);
+      if (concreteDeps.length === 0) continue;
+      await updateTask(sanitized, created.id, {
+        blocked_by: concreteDeps,
+        depends_on: concreteDeps,
       }, leaderCwd);
     }
 
@@ -2189,8 +2217,8 @@ export async function startTeam(
     }
 
     const allTasks = await listTasks(sanitized, leaderCwd);
-    if (options.decompositionMetadata) {
-      await writeDecompositionArtifacts(sanitized, leaderCwd, options.decompositionMetadata);
+    if (effectiveDecompositionMetadata) {
+      await writeDecompositionArtifacts(sanitized, leaderCwd, effectiveDecompositionMetadata);
     }
     const workerBootstrapPlans = [] as Array<{
       workerName: string;
@@ -2259,7 +2287,7 @@ export async function startTeam(
         workerRole: runtimeRole,
         rolePromptContent: rawRolePromptContent ?? undefined,
         worktreeRootAgentsCanonical: Boolean(workerWorkspace.worktreePath),
-        taskHints: options.decompositionMetadata?.task_hints,
+        taskHints: effectiveDecompositionMetadata?.task_hints,
       });
       const triggerDirective = buildTriggerDirective(
         workerName,

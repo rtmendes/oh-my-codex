@@ -5572,6 +5572,100 @@ esac
     }
   });
 
+  it('startTeam remaps repo-aware DAG dependencies after concrete task IDs are created', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-'));
+    const binDir = join(cwd, 'bin');
+    const fakeCodexPath = join(binDir, 'codex');
+    await mkdir(binDir, { recursive: true });
+    await writeFakePromptWorkerBinary(
+      fakeCodexPath,
+      `setTimeout(() => {}, 5000);`,
+    );
+
+    let runtime: TeamRuntime | null = null;
+    try {
+      runtime = await withPromptModeCodexEnv(binDir, {}, () =>
+        withoutTeamWorkerEnv(() =>
+          startTeam(
+            'team-dag-remap',
+            'repo-aware DAG remap test',
+            'executor',
+            2,
+            [
+              {
+                subject: 'Implement runtime',
+                description: 'Change runtime',
+                owner: 'worker-1',
+                role: 'executor',
+                symbolic_id: 'impl',
+                symbolic_depends_on: [],
+                lane: 'implementation',
+                filePaths: ['src/team/runtime.ts'],
+                allocation_reason: 'balances current load',
+              },
+              {
+                subject: 'Verify runtime',
+                description: 'Test runtime',
+                owner: 'worker-2',
+                role: 'test-engineer',
+                symbolic_id: 'verify',
+                symbolic_depends_on: ['impl'],
+                lane: 'verification',
+                allocation_reason: 'keeps blocked work on a lighter lane',
+              },
+            ],
+            cwd,
+            {
+              decompositionMetadata: {
+                decomposition_source: 'dag_sidecar',
+                worker_count_requested: 2,
+                worker_count_effective: 2,
+                worker_count_source: 'plan-suggested',
+                ready_lane_count: 1,
+                useful_lane_count: 2,
+                allocation_reasons: {
+                  impl: 'balances current load',
+                  verify: 'keeps blocked work on a lighter lane',
+                },
+                node_dependencies: {
+                  impl: [],
+                  verify: ['impl'],
+                },
+              },
+            },
+          ),
+        ),
+      );
+
+      const first = await readTask('team-dag-remap', '1', cwd);
+      const second = await readTask('team-dag-remap', '2', cwd);
+      assert.deepEqual(first?.depends_on, []);
+      assert.deepEqual(first?.blocked_by, undefined);
+      assert.deepEqual(second?.depends_on, ['1']);
+      assert.deepEqual(second?.blocked_by, ['1']);
+
+      const report = JSON.parse(
+        await readFile(join(cwd, '.omx', 'state', 'team', 'team-dag-remap', 'decomposition-report.json'), 'utf-8'),
+      ) as {
+        node_id_to_task_id?: Record<string, string>;
+        task_hints?: Record<string, { node_id?: string; depends_on?: string[]; symbolic_depends_on?: string[] }>;
+      };
+      assert.deepEqual(report.node_id_to_task_id, { impl: '1', verify: '2' });
+      assert.deepEqual(report.task_hints?.['2']?.depends_on, ['1']);
+      assert.deepEqual(report.task_hints?.['2']?.symbolic_depends_on, ['impl']);
+
+      const inbox = await readFile(join(cwd, '.omx', 'state', 'team', 'team-dag-remap', 'workers', 'worker-2', 'inbox.md'), 'utf-8');
+      assert.match(inbox, /Blocked by: 1/);
+      assert.doesNotMatch(inbox, /Blocked by: impl/);
+      assert.doesNotMatch(inbox, /Depends on: impl/);
+    } finally {
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('assignTask synthesizes delegation before follow-up dispatch rollback', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-'));
     try {

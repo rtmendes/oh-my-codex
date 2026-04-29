@@ -21,6 +21,7 @@ export interface RepoAwareTask {
   role?: string;
   blocked_by?: string[];
   depends_on?: string[];
+  symbolic_depends_on?: string[];
   requires_code_change?: boolean;
   filePaths?: string[];
   domains?: string[];
@@ -40,6 +41,7 @@ export interface TeamDecompositionMetadata {
   ready_lane_count: number;
   useful_lane_count: number;
   allocation_reasons: Record<string, string>;
+  node_dependencies?: Record<string, string[]>;
   node_id_to_task_id?: Record<string, string>;
   task_hints?: Record<string, TaskHintSummary>;
 }
@@ -49,6 +51,8 @@ export interface TaskHintSummary {
   lane?: string;
   filePaths?: string[];
   domains?: string[];
+  depends_on?: string[];
+  symbolic_depends_on?: string[];
   allocation_reason?: string;
 }
 
@@ -197,13 +201,12 @@ function buildFromDag(input: LegacyTeamExecutionPlanInput, resolution: TeamDagRe
     role: input.explicitAgentType ? input.agentType : undefined,
   }));
 
-  const nodeIdToIndex = new Map(sorted.map((node, index) => [node.id, String(index + 1)]));
   const allocationInput = sorted.map((node) => ({
     subject: node.subject,
     description: enrichNodeDescription(node, input.cwd),
     role: input.explicitAgentType ? input.agentType : node.role,
-    blocked_by: (node.depends_on ?? []).map((dep) => nodeIdToIndex.get(dep)!).filter(Boolean),
-    depends_on: (node.depends_on ?? []).map((dep) => nodeIdToIndex.get(dep)!).filter(Boolean),
+    blocked_by: node.depends_on ?? [],
+    symbolic_depends_on: node.depends_on ?? [],
     requires_code_change: node.requires_code_change,
     filePaths: node.filePaths,
     domains: inferDomains(node),
@@ -212,19 +215,12 @@ function buildFromDag(input: LegacyTeamExecutionPlanInput, resolution: TeamDagRe
   }));
   const allocated = allocateTasksToWorkers(allocationInput, workers);
   const allocationReasons: Record<string, string> = {};
-  const taskHints: Record<string, TaskHintSummary> = {};
-  const tasks = allocated.map((task, index): RepoAwareTask => {
-    const taskId = String(index + 1);
+  const tasks = allocated.map((task): RepoAwareTask => {
     allocationReasons[task.symbolic_id] = task.allocation_reason;
-    taskHints[taskId] = {
-      node_id: task.symbolic_id,
-      lane: task.lane,
-      filePaths: task.filePaths,
-      domains: task.domains,
-      allocation_reason: task.allocation_reason,
-    };
-    return task;
+    const { blocked_by: _symbolicBlockedBy, ...runtimeTask } = task;
+    return runtimeTask;
   });
+  const nodeDependencies = Object.fromEntries(sorted.map((node) => [node.id, node.depends_on ?? []]));
 
   return {
     workerCount: countPolicy.count,
@@ -241,9 +237,43 @@ function buildFromDag(input: LegacyTeamExecutionPlanInput, resolution: TeamDagRe
       ready_lane_count: readyLaneCount,
       useful_lane_count: useful,
       allocation_reasons: allocationReasons,
-      node_id_to_task_id: Object.fromEntries(sorted.map((node, index) => [node.id, String(index + 1)])),
-      task_hints: taskHints,
+      node_dependencies: nodeDependencies,
     },
+  };
+}
+
+export function remapRepoAwareDecompositionMetadataToCreatedTasks(
+  metadata: TeamDecompositionMetadata,
+  plannedTasks: Array<Pick<RepoAwareTask, 'symbolic_id' | 'symbolic_depends_on' | 'lane' | 'filePaths' | 'domains' | 'allocation_reason'>>,
+  createdTasks: Array<{ id: string }>,
+): TeamDecompositionMetadata {
+  const nodeIdToTaskId: Record<string, string> = {};
+  plannedTasks.forEach((task, index) => {
+    if (task.symbolic_id && createdTasks[index]?.id) {
+      nodeIdToTaskId[task.symbolic_id] = createdTasks[index].id;
+    }
+  });
+
+  const taskHints: Record<string, TaskHintSummary> = {};
+  plannedTasks.forEach((task, index) => {
+    const taskId = createdTasks[index]?.id;
+    if (!taskId || !task.symbolic_id) return;
+    const symbolicDeps = task.symbolic_depends_on ?? metadata.node_dependencies?.[task.symbolic_id] ?? [];
+    taskHints[taskId] = {
+      node_id: task.symbolic_id,
+      lane: task.lane,
+      filePaths: task.filePaths,
+      domains: task.domains,
+      depends_on: symbolicDeps.map((dep) => nodeIdToTaskId[dep]).filter(Boolean),
+      symbolic_depends_on: symbolicDeps,
+      allocation_reason: task.allocation_reason ?? metadata.allocation_reasons[task.symbolic_id],
+    };
+  });
+
+  return {
+    ...metadata,
+    node_id_to_task_id: nodeIdToTaskId,
+    task_hints: taskHints,
   };
 }
 
