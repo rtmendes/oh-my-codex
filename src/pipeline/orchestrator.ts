@@ -14,6 +14,7 @@ import { startMode, readModeState, updateModeState, cancelMode } from '../modes/
 import { createRalplanStage } from './stages/ralplan.js';
 import { createRalphStage } from './stages/ralph-verify.js';
 import { createCodeReviewStage } from './stages/code-review.js';
+import { isNonCleanReviewVerdict } from './review-verdict.js';
 import type {
   PipelineConfig,
   PipelineResult,
@@ -69,6 +70,7 @@ export async function runPipeline(config: PipelineConfig): Promise<PipelineResul
   // Execute stages sequentially
   const stageResults: Record<string, StageResult> = {};
   const artifacts: Record<string, unknown> = {};
+  const handoffArtifactsByStage: Record<string, unknown> = {};
   let previousResult: StageResult | undefined;
   let lastStageName: string | undefined;
   let reviewCycle = 0;
@@ -136,6 +138,7 @@ export async function runPipeline(config: PipelineConfig): Promise<PipelineResul
     // Merge artifacts
     if (result.artifacts) {
       Object.assign(artifacts, { [stage.name]: result.artifacts });
+      Object.assign(handoffArtifactsByStage, { [stage.name]: result.artifacts });
     }
 
     const resultArtifacts = result.artifacts as Record<string, unknown>;
@@ -147,14 +150,21 @@ export async function runPipeline(config: PipelineConfig): Promise<PipelineResul
       && result.status === 'completed'
       && isNonCleanReviewVerdict(reviewVerdict);
 
+    if (stage.name === 'code-review') {
+      artifacts.review_verdict = reviewVerdict ?? null;
+      artifacts.return_to_ralplan_reason = returnToRalplanReason ?? null;
+    }
+
     if (reviewIsNotClean) {
       reviewCycle += 1;
     }
 
+    const handoffArtifacts = normalizeHandoffArtifactKeys(handoffArtifactsByStage);
+
     // Persist stage result
     await updateModeState(MODE_NAME, {
       current_phase: reviewIsNotClean ? 'ralplan' : (result.status === 'completed' ? stage.name : `${stage.name}:${result.status}`),
-      handoff_artifacts: { ...artifacts, [stage.name]: result.artifacts },
+      handoff_artifacts: handoffArtifacts,
       ...(stage.name === 'code-review' ? {
         review_verdict: reviewVerdict,
         return_to_ralplan_reason: returnToRalplanReason ?? null,
@@ -291,13 +301,16 @@ export async function cancelPipeline(cwd?: string): Promise<void> {
 // Validation
 // ---------------------------------------------------------------------------
 
-function isNonCleanReviewVerdict(verdict: unknown): boolean {
-  if (!verdict || typeof verdict !== 'object') return false;
-  const review = verdict as { clean?: unknown; recommendation?: unknown; architectural_status?: unknown };
-  if (review.clean === false) return true;
-  if (review.recommendation && review.recommendation !== 'APPROVE') return true;
-  if (review.architectural_status && review.architectural_status !== 'CLEAR') return true;
-  return false;
+function normalizeHandoffArtifactKeys(artifacts: Record<string, unknown>): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(artifacts)) {
+    normalized[toHandoffArtifactKey(key)] = value;
+  }
+  return normalized;
+}
+
+function toHandoffArtifactKey(stageName: string): string {
+  return stageName === 'code-review' ? 'code_review' : stageName;
 }
 
 function validateConfig(config: PipelineConfig): void {

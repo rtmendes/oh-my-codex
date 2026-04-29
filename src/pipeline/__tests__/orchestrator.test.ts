@@ -187,6 +187,9 @@ describe('Pipeline Orchestrator', () => {
       assert.equal(ext?.review_cycle, 1);
       assert.equal((ext?.review_verdict as { clean?: boolean } | undefined)?.clean, true);
       assert.equal(ext?.return_to_ralplan_reason, null);
+      assert.ok(ext?.handoff_artifacts?.code_review);
+      assert.equal(Object.prototype.hasOwnProperty.call(ext?.handoff_artifacts ?? {}, 'code-review'), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(ext?.handoff_artifacts ?? {}, 'review_verdict'), false);
     });
 
     it('fails after bounded non-clean code-review cycles', async () => {

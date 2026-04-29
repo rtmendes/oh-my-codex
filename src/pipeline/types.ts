@@ -165,7 +165,7 @@ export interface PipelineModeStateExtension {
   /** Reason Autopilot returned to ralplan after a non-clean review. */
   return_to_ralplan_reason?: string | null;
 
-  /** Phase handoff artifacts keyed by ralplan, ralph, and code-review. */
+  /** Phase handoff artifacts keyed by contract names: ralplan, ralph, and code_review. */
   handoff_artifacts?: Record<string, unknown>;
 
   /** Ralph iteration ceiling for the verification stage. */

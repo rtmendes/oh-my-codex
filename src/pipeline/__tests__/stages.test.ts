@@ -91,6 +91,38 @@ describe('RALPLAN Stage', () => {
     assert.equal(stage.canSkip!(makeCtx()), true);
   });
 
+  it('canSkip returns false after non-clean code-review loopback even when plans exist', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(join(plansDir, 'prd-my-feature.md'), '# Plan\n');
+    await writeFile(join(plansDir, 'test-spec-my-feature.md'), '# Test Spec\n');
+
+    const stage = createRalplanStage();
+    assert.equal(stage.canSkip!(makeCtx({
+      artifacts: {
+        return_to_ralplan_reason: 'Review requested a plan update.',
+        review_verdict: { recommendation: 'REQUEST CHANGES', architectural_status: 'CLEAR', clean: false },
+      },
+    })), false);
+  });
+
+  it('canSkip returns false when nested code-review artifacts are non-clean', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(join(plansDir, 'prd-my-feature.md'), '# Plan\n');
+    await writeFile(join(plansDir, 'test-spec-my-feature.md'), '# Test Spec\n');
+
+    const stage = createRalplanStage();
+    assert.equal(stage.canSkip!(makeCtx({
+      artifacts: {
+        'code-review': {
+          review_verdict: { recommendation: 'COMMENT', architectural_status: 'CLEAR', clean: true },
+          return_to_ralplan_reason: null,
+        },
+      },
+    })), false);
+  });
+
   it('surfaces deep-interview specs in ralplan artifacts for downstream traceability', async () => {
     const specsDir = join(tempDir, '.omx', 'specs');
     await mkdir(specsDir, { recursive: true });
@@ -289,6 +321,19 @@ describe('Ralph Verify Stage', () => {
     assert.equal(typeof (descriptor.staffingPlan as Record<string, unknown>).staffingSummary, 'string');
   });
 
+  it('preserves legacy verification context precedence over ralplan artifacts', async () => {
+    const stage = createRalphVerifyStage();
+    const result = await stage.run(makeCtx({
+      artifacts: {
+        ralplan: { plan: 'approved plan' },
+        'team-exec': { teamDescriptor: { task: 'completed work' } },
+      },
+    }));
+
+    const descriptor = (result.artifacts as Record<string, unknown>).verifyDescriptor as Record<string, unknown>;
+    assert.deepEqual(descriptor.executionArtifacts, { teamDescriptor: { task: 'completed work' } });
+  });
+
   describe('buildRalphInstruction', () => {
     it('includes max iterations in instruction', () => {
       const staffingPlan = buildFollowupStaffingPlan('ralph', 'verify feature', ['architect', 'executor', 'test-engineer']);
@@ -337,6 +382,18 @@ describe('Strict Autopilot Ralph Stage', () => {
 
   it('uses the strict phase name ralph', () => {
     assert.equal(createRalphStage().name, 'ralph');
+  });
+
+  it('uses ralplan artifacts as the primary strict ralph execution input', async () => {
+    const result = await createRalphStage().run(makeCtx({
+      artifacts: {
+        ralplan: { plan: 'approved plan' },
+        'team-exec': { teamDescriptor: { task: 'legacy work' } },
+      },
+    }));
+
+    const descriptor = (result.artifacts as Record<string, unknown>).verifyDescriptor as Record<string, unknown>;
+    assert.deepEqual(descriptor.executionArtifacts, { plan: 'approved plan' });
   });
 });
 
