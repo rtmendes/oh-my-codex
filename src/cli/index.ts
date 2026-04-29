@@ -234,6 +234,9 @@ Options:
                 instead of overwriting user-authored content
   --dry-run     Show what would be done without doing it
   --plugin      Use Codex plugin delivery for omx setup and remove legacy OMX-managed user/project components
+  --legacy      Use legacy setup delivery for omx setup, overriding persisted plugin mode
+  --install-mode <legacy|plugin>
+                Explicit setup install mode (canonical form; --legacy/--plugin are aliases)
   --keep-config Skip config.toml cleanup during uninstall
   --purge       Remove .omx/ cache directory during uninstall
   --verbose     Show detailed output
@@ -346,8 +349,54 @@ export interface ResolvedCliInvocation {
 }
 
 export function resolveSetupInstallModeArg(args: string[]): SetupInstallMode | undefined {
-  if (args.includes("--plugin")) return "plugin";
-  return undefined;
+  let value: SetupInstallMode | undefined;
+  const setValue = (next: SetupInstallMode, source: string): void => {
+    if (value && value !== next) {
+      throw new Error(
+        `Conflicting setup install mode flags: ${source} selects ${next}, but another flag already selected ${value}`,
+      );
+    }
+    value = next;
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--plugin") {
+      setValue("plugin", arg);
+      continue;
+    }
+    if (arg === "--legacy") {
+      setValue("legacy", arg);
+      continue;
+    }
+    if (arg === "--install-mode") {
+      const next = args[index + 1];
+      if (!next || next.startsWith("-")) {
+        throw new Error(
+          `Missing setup install mode value after --install-mode. Expected one of: legacy, plugin`,
+        );
+      }
+      if (next !== "legacy" && next !== "plugin") {
+        throw new Error(
+          `Invalid setup install mode: ${next}. Expected one of: legacy, plugin`,
+        );
+      }
+      setValue(next, arg);
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--install-mode=")) {
+      const next = arg.slice("--install-mode=".length);
+      if (next !== "legacy" && next !== "plugin") {
+        throw new Error(
+          `Invalid setup install mode: ${next}. Expected one of: legacy, plugin`,
+        );
+      }
+      setValue(next, "--install-mode");
+    }
+  }
+
+  return value;
 }
 
 export function resolveSetupScopeArg(args: string[]): SetupScope | undefined {

@@ -1055,12 +1055,44 @@ describe("resolveCliInvocation", () => {
 });
 
 describe("resolveSetupInstallModeArg", () => {
-  it("maps --plugin to plugin install mode", () => {
+  it("maps explicit setup install mode flags", () => {
     assert.equal(resolveSetupInstallModeArg(["--dry-run"]), undefined);
     assert.equal(resolveSetupInstallModeArg(["--plugin"]), "plugin");
+    assert.equal(resolveSetupInstallModeArg(["--legacy"]), "legacy");
+    assert.equal(
+      resolveSetupInstallModeArg(["--install-mode", "legacy"]),
+      "legacy",
+    );
+    assert.equal(
+      resolveSetupInstallModeArg(["--install-mode=plugin"]),
+      "plugin",
+    );
     assert.equal(
       resolveSetupInstallModeArg(["--scope", "project", "--plugin"]),
       "plugin",
+    );
+  });
+
+  it("rejects invalid setup install mode flags", () => {
+    assert.throws(
+      () => resolveSetupInstallModeArg(["--install-mode"]),
+      /Missing setup install mode value after --install-mode/,
+    );
+    assert.throws(
+      () => resolveSetupInstallModeArg(["--install-mode", "workspace"]),
+      /Invalid setup install mode: workspace/,
+    );
+    assert.throws(
+      () => resolveSetupInstallModeArg(["--plugin", "--legacy"]),
+      /Conflicting setup install mode flags/,
+    );
+    assert.throws(
+      () => resolveSetupInstallModeArg(["--plugin", "--install-mode", "legacy"]),
+      /Conflicting setup install mode flags/,
+    );
+    assert.throws(
+      () => resolveSetupInstallModeArg(["--legacy", "--install-mode=plugin"]),
+      /Conflicting setup install mode flags/,
     );
   });
 });

@@ -888,6 +888,79 @@ describe("omx setup install mode behavior", () => {
 		}
 	});
 
+	it("lets explicit project legacy setup clear persisted project plugin mode", async () => {
+		const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
+		try {
+			await withTempCwd(wd, async () => {
+				await mkdir(join(wd, ".omx"), { recursive: true });
+				await writeFile(
+					join(wd, ".omx", "setup-scope.json"),
+					JSON.stringify({ scope: "project", installMode: "plugin" }),
+				);
+
+				await setup({ scope: "project", installMode: "legacy" });
+
+				const persisted = JSON.parse(
+					await readFile(join(wd, ".omx", "setup-scope.json"), "utf-8"),
+				) as { scope: string; installMode?: string };
+				assert.deepEqual(persisted, { scope: "project" });
+				assert.equal(
+					existsSync(join(wd, ".codex", "skills", "help", "SKILL.md")),
+					true,
+				);
+				assert.equal(
+					existsSync(join(wd, ".codex", "agents", "planner.toml")),
+					true,
+				);
+				assert.equal(
+					existsSync(join(wd, ".codex", "prompts", "executor.md")),
+					true,
+				);
+			});
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("lets explicit user legacy setup override persisted user plugin mode", async () => {
+		const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
+		try {
+			await withIsolatedUserHome(wd, async (codexHomeDir) => {
+				await withTempCwd(wd, async () => {
+					await mkdir(join(wd, ".omx"), { recursive: true });
+					await writeFile(
+						join(wd, ".omx", "setup-scope.json"),
+						JSON.stringify({ scope: "user", installMode: "plugin" }),
+					);
+
+					await setup({ installMode: "legacy" });
+
+					const persisted = JSON.parse(
+						await readFile(join(wd, ".omx", "setup-scope.json"), "utf-8"),
+					) as { scope: string; installMode?: string };
+					assert.deepEqual(persisted, {
+						scope: "user",
+						installMode: "legacy",
+					});
+					assert.equal(
+						existsSync(join(codexHomeDir, "skills", "help", "SKILL.md")),
+						true,
+					);
+					assert.equal(
+						existsSync(join(codexHomeDir, "agents", "planner.toml")),
+						true,
+					);
+					assert.equal(
+						existsSync(join(codexHomeDir, "prompts", "executor.md")),
+						true,
+					);
+				});
+			});
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
+
 	it("installs project-scoped native hooks when plugin mode is explicitly requested", async () => {
 		const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
 		try {

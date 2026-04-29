@@ -1560,21 +1560,21 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		}
 		if (verbose) console.log(`  mkdir ${dir}`);
 	}
-	await persistSetupPreferences(
-		projectRoot,
-		resolvedInstallMode
+	const setupPreferencesToPersist: PersistedSetupScope =
+		resolvedInstallMode &&
+		(resolvedScope.scope === "user" ||
+			resolvedInstallMode.installMode === "plugin")
 			? {
 					scope: resolvedScope.scope,
 					installMode: resolvedInstallMode.installMode,
 				}
 			: {
 					scope: resolvedScope.scope,
-				},
-		{
-			dryRun,
-			verbose,
-		},
-	);
+				};
+	await persistSetupPreferences(projectRoot, setupPreferencesToPersist, {
+		dryRun,
+		verbose,
+	});
 	console.log("  Done.\n");
 
 	if (resolvedScope.scope === "project") {

@@ -10,7 +10,7 @@ Use this skill when users want to install or refresh oh-my-codex for the **curre
 ## Command
 
 ```bash
-omx setup [--force] [--merge-agents] [--dry-run] [--verbose] [--scope <user|project>] [--plugin]
+omx setup [--force] [--merge-agents] [--dry-run] [--verbose] [--scope <user|project>] [--plugin|--legacy|--install-mode <legacy|plugin>]
 ```
 
 If you only want lightweight `AGENTS.md` scaffolding for an existing repo or subtree, use `omx agents-init [path]` instead of full setup.
@@ -22,6 +22,8 @@ Supported setup flags (current implementation):
 - `--verbose`: print per-file/per-step details
 - `--scope`: choose install scope (`user`, `project`)
 - `--plugin`: use Codex plugin delivery for bundled skills while archiving/removing legacy OMX-managed prompts/native agents and keeping setup-owned runtime hooks
+- `--legacy`: use legacy setup delivery, overriding any persisted plugin install mode
+- `--install-mode`: explicitly choose setup delivery mode (`legacy` or `plugin`); canonical form for scripted setup
 
 ## What this setup actually does
 
@@ -34,7 +36,7 @@ Supported setup flags (current implementation):
    - else interactive prompt on TTY (default `user`)
    - else default `user` (safe for CI/tests)
 2. If scope is `user`, resolve user skill delivery mode:
-   - explicit `--plugin`, if present
+   - explicit `--plugin`, `--legacy`, or `--install-mode legacy|plugin`, if present
    - persisted install mode in `./.omx/setup-scope.json`, if present and the TTY review decision is `keep`
    - else discovered installed plugin cache under `${CODEX_HOME:-~/.codex}/plugins/cache/**/.codex-plugin/plugin.json` with `name: oh-my-codex` makes `plugin` the default
    - else interactive prompt on TTY (`legacy` by default, or `plugin` when a plugin cache is discovered)
