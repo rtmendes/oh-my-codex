@@ -45,9 +45,27 @@ const OMX_TOP_LEVEL_KEYS = [
   "developer_instructions",
 ] as const;
 
-const DEFAULT_SETUP_MODEL = DEFAULT_FRONTIER_MODEL;
-const DEFAULT_SETUP_MODEL_CONTEXT_WINDOW = 250000;
-const DEFAULT_SETUP_MODEL_AUTO_COMPACT_TOKEN_LIMIT = 200000;
+export interface ModelContextRecommendation {
+  model: string;
+  modelContextWindow: number;
+  modelAutoCompactTokenLimit: number;
+}
+
+export const DEFAULT_SETUP_MODEL = DEFAULT_FRONTIER_MODEL;
+export const DEFAULT_SETUP_MODEL_CONTEXT_WINDOW = 250000;
+export const DEFAULT_SETUP_MODEL_AUTO_COMPACT_TOKEN_LIMIT = 200000;
+
+export function getModelContextRecommendation(
+  model: string,
+): ModelContextRecommendation | null {
+  if (model !== DEFAULT_SETUP_MODEL) return null;
+
+  return {
+    model,
+    modelContextWindow: DEFAULT_SETUP_MODEL_CONTEXT_WINDOW,
+    modelAutoCompactTokenLimit: DEFAULT_SETUP_MODEL_AUTO_COMPACT_TOKEN_LIMIT,
+  };
+}
 const OMX_SEEDED_BEHAVIORAL_DEFAULTS_START_MARKER =
   "# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)";
 const OMX_SEEDED_BEHAVIORAL_DEFAULTS_END_MARKER =
