@@ -7,7 +7,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { dirname, isAbsolute, normalize, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, normalize, relative, resolve } from 'node:path';
 import type { PipelineStage, StageContext, StageResult } from '../types.js';
 import {
   buildFollowupStaffingPlan,
@@ -60,6 +60,20 @@ function normalizePlanningRelativePath(rawPath: string): string {
   return normalize(withoutDotPrefix).replace(/\\/g, '/');
 }
 
+function planningArtifactSlug(path: string, prefixPattern: RegExp): string | null {
+  const file = basename(path);
+  const match = file.match(prefixPattern);
+  return match?.groups?.slug ?? null;
+}
+
+function matchingTestSpecPathsForPrd(artifacts: PlanningArtifacts, prdPath: string): string[] {
+  const prdSlug = planningArtifactSlug(prdPath, /^prd-(?<slug>.*)\.md$/i);
+  if (!prdSlug) return [];
+  return artifacts.testSpecPaths.filter(
+    (testSpecPath) => planningArtifactSlug(testSpecPath, /^test-?spec-(?<slug>.*)\.md$/i) === prdSlug,
+  );
+}
+
 function resolvePlanningPrdPath(
   artifacts: PlanningArtifacts,
   cwd: string,
@@ -89,10 +103,37 @@ function resolvePlanningPrdPath(
   };
 }
 
-function resolveApprovedTeamPlanPath(cwd: string, latestPlanPath: string): string {
+function readRuntimeLatestPlanningSelection(
+  artifacts: PlanningArtifacts,
+  cwd: string,
+  ralplanArtifacts?: Record<string, unknown>,
+): { prdPath: string | null; testSpecPaths: string[] } | null {
+  const drafts = Array.isArray(ralplanArtifacts?.drafts) ? ralplanArtifacts.drafts : [];
+  for (let index = drafts.length - 1; index >= 0; index -= 1) {
+    const draft = drafts[index];
+    if (!draft || typeof draft !== 'object') continue;
+    const draftRecord = draft as { planPath?: unknown };
+    const draftPlanPath = typeof draftRecord.planPath === 'string'
+      ? draftRecord.planPath.trim()
+      : '';
+    if (!draftPlanPath) continue;
+    const resolvedDraftPlanPath = resolvePlanningPrdPath(artifacts, cwd, draftPlanPath).matchedPath;
+    return {
+      prdPath: resolvedDraftPlanPath,
+      testSpecPaths: resolvedDraftPlanPath ? matchingTestSpecPathsForPrd(artifacts, resolvedDraftPlanPath) : [],
+    };
+  }
+  return null;
+}
+
+function resolveApprovedTeamPlanPath(
+  cwd: string,
+  latestPlanPath: string,
+  ralplanArtifacts?: Record<string, unknown>,
+): string {
   const artifacts = readPlanningArtifacts(cwd);
   const resolvedLatestPlanPath = resolvePlanningPrdPath(artifacts, cwd, latestPlanPath);
-  const selection = readLatestPlanningArtifacts(cwd);
+  const selection = readRuntimeLatestPlanningSelection(artifacts, cwd, ralplanArtifacts) ?? readLatestPlanningArtifacts(cwd);
   const selectedPrdPath = selection.prdPath
     ? resolvePlanningPrdPath(artifacts, cwd, selection.prdPath).matchedPath
     : null;
@@ -107,8 +148,12 @@ function resolveApprovedTeamPlanPath(cwd: string, latestPlanPath: string): strin
   return selectedPrdPath;
 }
 
-function resolveApprovedTeamTaskFromPlanPath(cwd: string, latestPlanPath: string): string {
-  const approvedPlanPath = resolveApprovedTeamPlanPath(cwd, latestPlanPath);
+function resolveApprovedTeamTaskFromPlanPath(
+  cwd: string,
+  latestPlanPath: string,
+  ralplanArtifacts?: Record<string, unknown>,
+): string {
+  const approvedPlanPath = resolveApprovedTeamPlanPath(cwd, latestPlanPath, ralplanArtifacts);
   let content = '';
   try {
     content = readFileSync(approvedPlanPath, 'utf-8');
@@ -139,7 +184,7 @@ function resolveTeamExecTask(ctx: StageContext, ralplanArtifacts?: Record<string
   if (!latestPlanPath) {
     return requestedTask;
   }
-  return resolveApprovedTeamTaskFromPlanPath(ctx.cwd, latestPlanPath);
+  return resolveApprovedTeamTaskFromPlanPath(ctx.cwd, latestPlanPath, ralplanArtifacts);
 }
 
 /**

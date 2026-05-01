@@ -377,6 +377,41 @@ Launch via $team 2:executor 'Fix C:\\tmp and keep \n literal'
     assert.ok(instruction.includes(JSON.stringify(expectedTask)));
   });
 
+  it('derives the team-exec task from the latest ralplan draft when numeric PRD slugs sort lexically out of order', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(
+      join(plansDir, 'prd-issue-9.md'),
+      '# Issue 9 plan\n\nLaunch via omx team 2:executor "Execute issue 9 handoff"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-issue-9.md'), '# Issue 9 test spec\n');
+    await writeFile(
+      join(plansDir, 'prd-issue-10.md'),
+      '# Issue 10 plan\n\nLaunch via omx team 3:debugger "Execute issue 10 handoff"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-issue-10.md'), '# Issue 10 test spec\n');
+
+    const stage = createTeamExecStage();
+    const result = await stage.run(makeCtx({
+      task: 'original request task',
+      artifacts: {
+        ralplan: {
+          task: 'original request task',
+          stage: 'ralplan',
+          latestPlanPath: join('.omx', 'plans', 'prd-issue-10.md'),
+          drafts: [
+            { planPath: join('.omx', 'plans', 'prd-issue-9.md') },
+            { planPath: join('.omx', 'plans', 'prd-issue-10.md') },
+          ],
+        },
+      },
+    }));
+
+    assert.equal(result.status, 'completed');
+    const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
+    assert.equal(descriptor.task, 'Execute issue 10 handoff');
+  });
+
   it('fails closed when latestPlanPath is not the selected latest approved PRD', async () => {
     const plansDir = join(tempDir, '.omx', 'plans');
     await mkdir(plansDir, { recursive: true });
