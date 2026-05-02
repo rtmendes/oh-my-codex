@@ -18,6 +18,8 @@ export interface TeamLookupCandidate {
   leaderSessionId: string;
   leaderPaneId: string;
   tmuxSession: string;
+  terminal: boolean;
+  phaseUpdatedAt: string;
 }
 
 export class TeamLookupAmbiguityError extends Error {
@@ -37,6 +39,19 @@ function sanitizeBase(value: string): string {
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
   return sanitized || 'team';
+}
+
+function normalizeLookupName(value: string): string {
+  const sanitized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  const input = sanitized.slice(0, 30).replace(/-$/, '');
+  if (!TEAM_NAME_SAFE_PATTERN.test(input)) {
+    throw new Error(`invalid_team_name:${value}`);
+  }
+  return input;
 }
 
 function shortHash(value: string): string {
@@ -92,6 +107,8 @@ function candidateFromDir(root: string, teamName: string): TeamLookupCandidate |
   const leader = source.leader && typeof source.leader === 'object' && !Array.isArray(source.leader)
     ? source.leader as Record<string, unknown>
     : {};
+  const phase = readJson(join(root, teamName, 'phase.json'));
+  const currentPhase = str(phase?.current_phase);
   const displayName = str(source.display_name) || str(source.requested_name) || str(config?.display_name) || str(config?.requested_name) || teamName;
   return {
     teamName,
@@ -100,6 +117,8 @@ function candidateFromDir(root: string, teamName: string): TeamLookupCandidate |
     leaderSessionId: str(leader.session_id),
     leaderPaneId: str(source.leader_pane_id) || str(config?.leader_pane_id),
     tmuxSession: str(source.tmux_session) || str(config?.tmux_session),
+    terminal: currentPhase === 'complete' || currentPhase === 'failed' || currentPhase === 'cancelled',
+    phaseUpdatedAt: str(phase?.updated_at),
   };
 }
 
@@ -133,24 +152,45 @@ export function listTeamLookupCandidates(cwd: string, env: NodeJS.ProcessEnv = p
   return [...byTeamName.values()];
 }
 
-export function resolveTeamNameForCurrentContext(inputName: string, cwd: string, env: NodeJS.ProcessEnv = process.env): string {
-  if (/[^a-zA-Z0-9-]/.test(inputName.trim())) return inputName.trim();
-  const input = sanitizeBase(inputName);
-  for (const root of teamLookupRoots(cwd, env)) {
-    if (existsSync(join(root, input))) return input;
-  }
+function matchingCurrentLeader(candidate: TeamLookupCandidate, scope: TeamIdentityScope): boolean {
+  return (Boolean(scope.sessionId) && candidate.leaderSessionId === scope.sessionId)
+    || (Boolean(scope.paneId) && candidate.leaderPaneId === scope.paneId);
+}
 
+function selectLatestTerminalCandidate(candidates: TeamLookupCandidate[]): TeamLookupCandidate | null {
+  const terminal = candidates.filter((candidate) => candidate.terminal);
+  if (terminal.length === 0) return null;
+
+  const ranked = terminal
+    .map((candidate) => ({ candidate, time: Date.parse(candidate.phaseUpdatedAt) }))
+    .filter((entry) => Number.isFinite(entry.time))
+    .sort((a, b) => b.time - a.time);
+  if (ranked.length === 0) return terminal.length === 1 ? terminal[0] : null;
+  if (ranked.length === 1 || ranked[0].time > ranked[1].time) return ranked[0].candidate;
+  return null;
+}
+
+export function resolveTeamNameForCurrentContext(inputName: string, cwd: string, env: NodeJS.ProcessEnv = process.env): string {
+  const input = normalizeLookupName(inputName);
   const candidates = listTeamLookupCandidates(cwd, env).filter((candidate) => {
-    return sanitizeBase(candidate.displayName) === input || sanitizeBase(candidate.requestedName) === input;
+    return candidate.teamName === input
+      || sanitizeBase(candidate.displayName) === input
+      || sanitizeBase(candidate.requestedName) === input;
   });
   if (candidates.length === 0) return input;
 
   const scope = resolveTeamIdentityScope(env);
-  const current = candidates.filter((candidate) => {
-    return (scope.sessionId && candidate.leaderSessionId === scope.sessionId)
-      || (scope.paneId && candidate.leaderPaneId === scope.paneId);
-  });
+  const activeCandidates = candidates.filter((candidate) => !candidate.terminal);
+  const lookupCandidates = activeCandidates.length > 0 ? activeCandidates : candidates;
+  if (lookupCandidates.length === 1) return lookupCandidates[0].teamName;
+
+  const current = lookupCandidates.filter((candidate) => matchingCurrentLeader(candidate, scope));
   if (current.length === 1) return current[0].teamName;
-  if (candidates.length === 1 && !scope.sessionId && !scope.paneId) return candidates[0].teamName;
-  throw new TeamLookupAmbiguityError(input, current.length > 1 ? current : candidates);
+
+  if (activeCandidates.length === 0) {
+    const latestTerminal = selectLatestTerminalCandidate(lookupCandidates);
+    if (latestTerminal) return latestTerminal.teamName;
+  }
+
+  throw new TeamLookupAmbiguityError(input, current.length > 1 ? current : lookupCandidates);
 }

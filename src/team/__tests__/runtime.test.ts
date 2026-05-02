@@ -1323,6 +1323,92 @@ sleep 5
     }
   });
 
+
+  it('shutdownTeam with path-like display input cannot remove state outside the team directory', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-unsafe-'));
+    try {
+      const victim = join(cwd, '.omx', 'state', 'victim');
+      await mkdir(victim, { recursive: true });
+      await writeFile(join(victim, 'keep.txt'), 'keep');
+
+      await shutdownTeam('../../victim', cwd, { force: true });
+      assert.equal(existsSync(join(victim, 'keep.txt')), true);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('startTeam blocks duplicate no-session/no-tmux prompt-mode starts with stable cwd leader identity', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-prompt-duplicate-nosession-'));
+    const binDir = join(cwd, 'bin');
+    const fakeCodexPath = join(binDir, 'codex');
+    await mkdir(binDir, { recursive: true });
+    await writeFakePromptWorkerBinary(
+      fakeCodexPath,
+      `setTimeout(() => {}, 5000);
+process.on('SIGTERM', () => process.exit(0));`,
+    );
+
+    let runtime: TeamRuntime | null = null;
+    try {
+      await withPromptModeCodexEnv(
+        binDir,
+        {
+          OMX_SESSION_ID: undefined,
+          CODEX_SESSION_ID: undefined,
+          SESSION_ID: undefined,
+          TMUX_PANE: undefined,
+        },
+        async () => {
+          runtime = await withoutTeamWorkerEnv(() =>
+            startTeam(
+              'first-prompt-team',
+              'first no-session prompt team',
+              'executor',
+              1,
+              [{ subject: 's', description: 'd', owner: 'worker-1' }],
+              cwd,
+            ));
+
+          assert.equal(runtime.config.worker_launch_mode, 'prompt');
+          assert.match(runtime.teamName, /^first-prompt-team-[a-f0-9]{8}$/);
+          assert.equal(runtime.config.display_name, 'first-prompt-team');
+          assert.equal(runtime.config.identity_source, 'run-id');
+          const manifest = JSON.parse(
+            await readFile(join(cwd, '.omx', 'state', 'team', runtime.teamName, 'manifest.v2.json'), 'utf-8'),
+          ) as { leader?: { session_id?: string } };
+          assert.equal(manifest.leader?.session_id, `cwd:${cwd}`);
+
+          await assert.rejects(
+            () => withoutTeamWorkerEnv(() =>
+              startTeam(
+                'second-prompt-team',
+                'second no-session prompt team must be blocked',
+                'executor',
+                1,
+                [{ subject: 's2', description: 'd2', owner: 'worker-1' }],
+                cwd,
+              )),
+            /leader_session_conflict: active team exists \(first-prompt-team-[a-f0-9]{8}\)/,
+          );
+
+          const teamEntries = await readdir(join(cwd, '.omx', 'state', 'team'), { withFileTypes: true });
+          assert.equal(
+            teamEntries.some((entry) => entry.isDirectory() && entry.name.startsWith('second-prompt-team-')),
+            false,
+            'blocked duplicate start must not create a second prompt-mode team state directory',
+          );
+        },
+      );
+    } finally {
+      const runtimeToShutdown = runtime as TeamRuntime | null;
+      if (runtimeToShutdown) {
+        await shutdownTeam(runtimeToShutdown.teamName, cwd, { force: true }).catch(() => {});
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('startTeam rejects duplicate active same-name team state without mutating existing files', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-duplicate-team-'));
     const prevSessionId = process.env.OMX_SESSION_ID;
@@ -1887,28 +1973,29 @@ esac
           process.env.OMX_TEAM_STARTUP_EVIDENCE_TIMEOUT_MS = '50';
           process.env.OMX_TEAM_STARTUP_DISPATCH_RETRIES = '1';
 
-          const startedAt = performance.now();
           const runtime = await withoutTeamWorkerEnv(() =>
             startTeam(
               'team-startup-direct-fast',
-              'startup direct trigger should bypass slow ready wait',
+              'startup direct trigger falls back to evidence-gated dispatch',
               'executor',
               1,
               [{ subject: 'w1', description: 'worker one', owner: 'worker-1' }],
               cwd,
             ));
           runtimeTeamName = runtime.teamName;
-          const elapsedMs = performance.now() - startedAt;
-          assert.ok(elapsedMs < 2_000, `startup direct trigger should return quickly, got ${elapsedMs}ms`);
 
           const order = (await readFile(join(cwd, 'startup-order.log'), 'utf-8')).trim().split('\n');
           assert.ok(order.includes('send-keys'), `expected direct send-keys, got ${order.join(',')}`);
 
-          const timing = JSON.parse(await readFile(join(cwd, '.omx', 'state', 'team', runtime.teamName, 'startup-timing.json'), 'utf-8')) as { events: Array<{ phase: string; reason?: string }> };
+          const timing = JSON.parse(await readFile(join(cwd, '.omx', 'state', 'team', runtime.teamName, 'startup-timing.json'), 'utf-8')) as { events: Array<{ phase: string; reason?: string; ok?: boolean }> };
           assert.ok(timing.events.some((event) => event.phase === 'split_returned'));
           assert.ok(timing.events.some((event) => event.phase === 'identity_inbox_written'));
           assert.ok(timing.events.some((event) => event.phase === 'direct_fallback' && /startup_direct_trigger_sent/.test(event.reason ?? '')));
+          assert.ok(timing.events.some((event) => event.phase === 'startup_evidence' && event.reason === 'none' && event.ok === false));
           assert.equal(timing.events.some((event) => event.phase === 'ready_wait_start'), false);
+          const workerStatus = await readWorkerStatus(runtime.teamName, 'worker-1', cwd);
+          assert.equal(workerStatus?.state, 'unknown');
+          assert.match(workerStatus?.reason ?? '', /startup_direct_no_evidence/);
         },
       );
     } finally {

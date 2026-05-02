@@ -58,7 +58,7 @@ import {
   type TeamMonitorSnapshotState,
   type TeamSummary,
 } from './team-ops.js';
-import { resolveTeamNameForCurrentContext, TeamLookupAmbiguityError } from './team-identity.js';
+import { listTeamLookupCandidates, resolveTeamNameForCurrentContext, TeamLookupAmbiguityError } from './team-identity.js';
 
 const TEAM_UPDATE_TASK_MUTABLE_FIELDS = new Set(['subject', 'description', 'blocked_by', 'requires_code_change']);
 const TEAM_UPDATE_TASK_REQUEST_FIELDS = new Set(['team_name', 'task_id', 'workingDirectory', ...TEAM_UPDATE_TASK_MUTABLE_FIELDS]);
@@ -569,6 +569,29 @@ function validateCommonFields(args: Record<string, unknown>, options: { skipTeam
   }
 }
 
+
+function normalizeTeamDisplayLookupName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 30)
+    .replace(/-$/, '');
+}
+
+function assertUnsafeTeamNameMatchesKnownDisplay(rawTeamName: string, cwd: string): void {
+  if (TEAM_NAME_SAFE_PATTERN.test(rawTeamName)) return;
+  const normalized = normalizeTeamDisplayLookupName(rawTeamName);
+  const matchesKnownDisplay = listTeamLookupCandidates(cwd).some((candidate) => {
+    return normalizeTeamDisplayLookupName(candidate.displayName) === normalized
+      || normalizeTeamDisplayLookupName(candidate.requestedName) === normalized;
+  });
+  if (!matchesKnownDisplay) {
+    throw new Error(`Invalid team_name: "${rawTeamName}". Must match /^[a-z0-9][a-z0-9-]{0,29}$/ or resolve to an existing display name.`);
+  }
+}
+
 export async function executeTeamApiOperation(
   operation: TeamApiOperation,
   args: Record<string, unknown>,
@@ -577,6 +600,7 @@ export async function executeTeamApiOperation(
   try {
     validateCommonFields(args, { skipTeamName: true });
     const rawTeamNameForCwd = String(args.team_name || '').trim();
+    if (rawTeamNameForCwd) assertUnsafeTeamNameMatchesKnownDisplay(rawTeamNameForCwd, fallbackCwd);
     const resolvedTeamName = rawTeamNameForCwd ? resolveTeamNameForCurrentContext(rawTeamNameForCwd, fallbackCwd) : '';
     const cwd = resolvedTeamName ? resolveTeamWorkingDirectory(resolvedTeamName, fallbackCwd) : fallbackCwd;
     const opArgs = resolvedTeamName ? { ...args, team_name: resolvedTeamName } : args;

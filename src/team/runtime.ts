@@ -2181,17 +2181,29 @@ export async function startTeam(
   await assertNestedTeamAllowed(leaderCwd);
   const effectiveWorktreeMode = resolveEffectiveTeamWorktreeMode(leaderCwd, options.worktreeMode);
   const displayName = sanitizeTeamName(teamName);
-  const identityScope = resolveTeamIdentityScope(process.env);
+  const workerLaunchMode = resolveTeamWorkerLaunchMode(process.env);
+  const displayMode = workerLaunchMode === 'interactive' ? 'split_pane' : 'auto';
+  const rawIdentityScope = resolveTeamIdentityScope(process.env);
+  const resolvedLeaderSessionId = await resolveLeaderSessionId(leaderCwd);
+  const identityScope = rawIdentityScope.source === 'run-id'
+    ? (resolvedLeaderSessionId
+      ? { ...rawIdentityScope, sessionId: resolvedLeaderSessionId, runId: '' }
+      : {
+        ...rawIdentityScope,
+        // Prompt-mode starts can run outside tmux/native session metadata. A fresh
+        // random run id would give every start a new leader identity and bypass
+        // one-active-team protection, so scope that fallback to the leader cwd.
+        runId: `cwd:${leaderCwd}`,
+      })
+    : rawIdentityScope;
   const sanitized = buildInternalTeamName(displayName, identityScope);
-  const leaderSessionId = identityScope.sessionId || identityScope.paneId || identityScope.tmuxTarget || identityScope.runId || await resolveLeaderSessionId(leaderCwd);
+  const leaderSessionId = identityScope.sessionId || identityScope.paneId || identityScope.tmuxTarget || identityScope.runId;
 
   await assertTeamStartupIsNonDestructive(sanitized, leaderCwd, leaderSessionId);
   if (displayName !== sanitized) {
     await assertTeamStartupIsNonDestructive(displayName, leaderCwd, leaderSessionId);
   }
 
-  const workerLaunchMode = resolveTeamWorkerLaunchMode(process.env);
-  const displayMode = workerLaunchMode === 'interactive' ? 'split_pane' : 'auto';
   if (workerLaunchMode === 'interactive') {
     if (!isTmuxAvailable()) {
       throw new Error('Team mode requires tmux. Install with: apt install tmux / brew install tmux');
@@ -2638,6 +2650,7 @@ export async function startTeam(
           inbox,
           triggerMessage: trigger,
           intent: triggerIntent,
+          taskIds: workerTasks.map((task) => task.id),
           cwd: leaderCwd,
           timing: startupTiming,
         })
@@ -4007,6 +4020,7 @@ async function attemptStartupDirectTrigger(params: {
   inbox: string;
   triggerMessage: string;
   intent?: TeamReminderIntent;
+  taskIds: string[];
   cwd: string;
   timing: StartupTimingRecorder;
 }): Promise<DispatchOutcome | null> {
@@ -4020,6 +4034,7 @@ async function attemptStartupDirectTrigger(params: {
     inbox,
     triggerMessage,
     intent,
+    taskIds,
     cwd,
     timing,
   } = params;
@@ -4067,10 +4082,11 @@ async function attemptStartupDirectTrigger(params: {
   });
   if (!queued.ok) return queued;
 
+  const effectiveWorkerCli = workerCli ?? 'codex';
   const workerStartupEvidence = await waitForWorkerStartupEvidence({
     teamName,
     workerName,
-    workerCli: workerCli ?? 'codex',
+    workerCli: effectiveWorkerCli,
     cwd,
     timeoutMs: 0,
     pollMs: STARTUP_EVIDENCE_POLL_MS,
@@ -4084,9 +4100,22 @@ async function attemptStartupDirectTrigger(params: {
     request_id: queued.request_id,
   });
 
+  const reason = workerStartupEvidence === 'none'
+    ? `${effectiveWorkerCli}_startup_direct_no_evidence:${safety.reason}`
+    : `startup_direct_trigger_sent:${safety.reason}`;
+  if ((effectiveWorkerCli === 'codex' || effectiveWorkerCli === 'claude') && workerStartupEvidence === 'none') {
+    await recordRecoverableStartupIssue({
+      teamName,
+      workerName,
+      taskIds,
+      reason,
+      cwd,
+    });
+  }
+
   return {
     ...queued,
-    reason: `startup_direct_trigger_sent:${safety.reason}`,
+    reason,
   };
 }
 

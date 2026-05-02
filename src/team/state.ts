@@ -590,7 +590,14 @@ function resolveTeamStateRoot(cwd: string, env: NodeJS.ProcessEnv = process.env)
   return omxStateDir(cwd);
 }
 
+function assertSafeTeamName(teamName: string): void {
+  if (!TEAM_NAME_SAFE_PATTERN.test(teamName)) {
+    throw new Error(`invalid_team_name:${teamName}`);
+  }
+}
+
 function teamDir(teamName: string, cwd: string): string {
+  assertSafeTeamName(teamName);
   return join(resolveTeamStateRoot(cwd), 'team', teamName);
 }
 
